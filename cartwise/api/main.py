@@ -12,6 +12,7 @@ def check_qdrant(settings: Settings) -> str:
         response = httpx.get(
             health_url,
             timeout=settings.healthcheck_timeout_seconds,
+            trust_env=False,
         )
         response.raise_for_status()
     except httpx.HTTPError:
