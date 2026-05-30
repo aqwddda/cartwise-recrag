@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic-settings
+python-dotenv
+qdrant-client
+httpx
+pytest
+recbole
+streamlit 
+sentence-transformers 
+rank-bm25 
+openai 
+pyarrow
