@@ -1,0 +1,3 @@
+model,split,users,Recall@10,NDCG@10,HitRate@10
+popularity,valid,57439,0.029997,0.015641,0.029997
+popularity,test,57439,0.025906,0.013319,0.025906

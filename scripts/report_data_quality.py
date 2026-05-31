@@ -10,10 +10,9 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROCESSED_ROOT = PROJECT_ROOT / "data" / "processed"
-DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "data_quality.md"
+DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "generated" / "data_quality.md"
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,7 +102,9 @@ def generate_report(processed_root: Path, output: Path) -> None:
     )
     for field in ("title", "brand", "price", "description"):
         missing = missing_count(items, field)
-        lines.append(f"| items | {field} | {missing:,} | {ratio(missing, item_count)} |")
+        lines.append(
+            f"| items | {field} | {missing:,} | {ratio(missing, item_count)} |"
+        )
     missing_review_text = stats["reviews"]["missing_text_rows"]
     lines.append(
         f"| source catalog reviews | text | {missing_review_text:,} | "

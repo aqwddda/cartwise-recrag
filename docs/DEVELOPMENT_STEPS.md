@@ -140,7 +140,7 @@ data/processed/interactions_train.parquet
 data/processed/interactions_valid.parquet
 data/processed/interactions_test.parquet
 data/processed/reviews.parquet
-reports/data_quality.md
+docs/DATA_QUALITY.md
 ```
 
 ### 验收
@@ -565,4 +565,3 @@ git commit -m "docs: complete reproducible demo guide"
 5. 启动 FastAPI 并手动请求 `/health`。
 
 阶段 1 验收通过后，再开始数据下载和预处理。
-
