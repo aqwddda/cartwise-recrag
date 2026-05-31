@@ -140,7 +140,6 @@ data/processed/interactions_train.parquet
 data/processed/interactions_valid.parquet
 data/processed/interactions_test.parquet
 data/processed/reviews.parquet
-docs/DATA_QUALITY.md
 ```
 
 ### 验收
@@ -202,22 +201,40 @@ tests/test_filters.py
 
 ### 功能
 
-- 支持价格上限。
-- 支持排除品牌。
-- 支持排除已展示商品。
-- 有价格约束时，排除价格缺失商品。
+- 支持类目、价格、品牌、颜色和材料五类硬约束。
+- 类目使用小型受控词表，从商品标题、`categories` 和
+  `details_json["Instrument"]` 中派生 `category_tags`。阶段 4 先覆盖演示用例，
+  阶段 6 构建商品索引时再改进词表、覆盖率和归一化策略。
+- 价格支持上下限，边界包含在结果内。
+- 品牌支持指定品牌和排除品牌。
+- 颜色合并 `details_json["Color Name"]` 和 `details_json["Color"]`，
+  派生 `color_tags`。
+- 材料合并 `details_json["Material Type"]` 和 `details_json["Material"]`，
+  派生 `material_tags`。
+- 字符串比较使用 `strip + casefold` 归一化。
+- 仅当用户明确指定某项约束时才执行对应过滤。存在价格、类目、颜色或材料约束时，
+  缺失对应字段的商品必须排除；没有对应约束时允许保留缺失字段的商品。
+- 预留 `excluded_parent_asins` 接口，但阶段 4 不使用。当前会话已展示商品排除和
+  `换一批` 功能留到后续阶段。
 - 候选不足 5 个时返回实际数量，不自动放宽约束。
 
-硬过滤器必须独立于 LLM 和推荐模型。
+硬过滤器位于候选召回、融合和排序之后，截取 Top 5 之前。它只执行当前请求中的
+明确约束，不负责读取用户 ID、处理用户历史交互序列、召回候选、计算推荐分数或
+改变候选顺序。硬过滤器必须独立于 LLM 和推荐模型。
 
 ### 验收
 
 测试以下边界：
 
+- 类目受控词表可以识别演示用例中的商品。
+- 商品缺失类目标签时，有类目约束则排除，无类目约束则允许保留。
+- 价格恰好等于下限。
 - 价格恰好等于上限。
-- 商品价格缺失。
-- 品牌大小写差异。
-- 已展示商品再次出现。
+- 商品价格缺失时，有价格约束则排除，无价格约束则允许保留。
+- 品牌、颜色和材料的大小写与首尾空格差异。
+- 商品缺失颜色或材料时，有对应约束则排除，无对应约束则允许保留。
+- `excluded_parent_asins` 接口存在但默认不影响结果。
+- 过滤后保留候选原始顺序。
 - 过滤后候选不足 5 个。
 
 ### 提交
@@ -312,10 +329,10 @@ tests/test_fusion.py
 
 使用 weighted Reciprocal Rank Fusion 合并候选：
 
-| 用户类型 | 候选权重 |
-|---|---|
-| 已知用户 | LightGCN `0.45`、Dense `0.30`、BM25 `0.15`、Popularity `0.10` |
-| 冷启动用户 | Dense `0.50`、BM25 `0.30`、Popularity `0.20` |
+| 用户类型   | 候选权重                                                      |
+| ---------- | ------------------------------------------------------------- |
+| 已知用户   | LightGCN `0.45`、Dense `0.30`、BM25 `0.15`、Popularity `0.10` |
+| 冷启动用户 | Dense `0.50`、BM25 `0.30`、Popularity `0.20`                  |
 
 处理流程：
 
@@ -553,15 +570,3 @@ git commit -m "feat: add streamlit demo"
 git add .
 git commit -m "docs: complete reproducible demo guide"
 ```
-
-## 当前应执行的任务
-
-现在只完成阶段 1：
-
-1. 在 `cartwise/core/config.py` 中读取配置。
-2. 在 `cartwise/api/main.py` 中实现 `/health`。
-3. 在 `tests/test_health.py` 中编写测试。
-4. 运行 `pytest`。
-5. 启动 FastAPI 并手动请求 `/health`。
-
-阶段 1 验收通过后，再开始数据下载和预处理。

@@ -1,4 +1,4 @@
-# Musical_Instruments Data Quality Report
+# Musical_Instruments Dataset Report
 
 ## Dataset Scope
 
@@ -10,6 +10,66 @@
 | Retained review evidence candidates | 240,525 |
 | Items with retained reviews | 24,587 |
 | Maximum retained reviews for one item | 10 |
+
+## Processed Dataset Schema
+
+The preprocessing pipeline writes five Parquet datasets under `data/processed`.
+All product joins use `parent_asin` as the unified product key.
+
+| Dataset | Rows | Purpose |
+|---|---:|---|
+| `items.parquet` | 24,587 | Product metadata for products retained by the official `5core` dataset |
+| `interactions_train.parquet` | 396,958 | Training interactions used to build recommendation models |
+| `interactions_valid.parquet` | 57,439 | Chronologically later validation interactions |
+| `interactions_test.parquet` | 57,439 | Chronologically later test interactions |
+| `reviews.parquet` | 240,525 | Review evidence candidates, limited to at most 10 reviews per product |
+
+### `items.parquet`
+
+| Field | Type | Description |
+|---|---|---|
+| `parent_asin` | `string` | Unified product identifier used as the primary product key |
+| `title` | `string` | Product title |
+| `brand` | `string` | Product brand, normalized from metadata details or store name |
+| `price` | `double` | Parsed product price |
+| `main_category` | `string` | Main product category |
+| `categories` | `list<string>` | Product category hierarchy or category labels |
+| `description` | `string` | Product description text, joined with line breaks when the source contains multiple entries |
+| `features` | `list<string>` | Product feature descriptions |
+| `details_json` | `string` | Additional structured product details serialized as JSON |
+| `bought_together` | `list<string>` | Related product identifiers from the source metadata |
+
+### Interaction Datasets
+
+`interactions_train.parquet`, `interactions_valid.parquet`, and
+`interactions_test.parquet` use the same schema.
+
+| Field | Type | Description |
+|---|---|---|
+| `user_id` | `string` | User identifier |
+| `parent_asin` | `string` | Unified product identifier |
+| `rating` | `double` | User rating from 1 to 5 |
+| `timestamp` | `int64` | Interaction timestamp from the source review |
+
+### `reviews.parquet`
+
+| Field | Type | Description |
+|---|---|---|
+| `parent_asin` | `string` | Unified product identifier |
+| `asin` | `string` | Identifier of the reviewed product variant |
+| `user_id` | `string` | Review author identifier |
+| `rating` | `double` | Review rating from 1 to 5 |
+| `timestamp` | `int64` | Review timestamp from the source review |
+| `title` | `string` | Review title |
+| `text` | `string` | Review body text |
+| `helpful_vote` | `int64` | Number of helpful votes |
+| `verified_purchase` | `bool` | Whether the source marks the review as a verified purchase |
+
+### Processing Statistics
+
+`data/processed/preprocess_stats.json` records preprocessing counts, including
+catalog size, split sizes, deduplication counts, filtering counts, chronology
+validation results, and retained review evidence counts.
 
 ## Chronological Splits
 

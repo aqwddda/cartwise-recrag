@@ -16,7 +16,6 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAW_ROOT = PROJECT_ROOT / "data" / "raw" / "amazon_reviews_2023"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "data" / "processed"
@@ -149,7 +148,9 @@ def write_parquet_rows(
     return count
 
 
-def scan_interaction_catalog(raw_root: Path) -> tuple[set[str], Counter[str], dict[str, int]]:
+def scan_interaction_catalog(
+    raw_root: Path,
+) -> tuple[set[str], Counter[str], dict[str, int]]:
     items: set[str] = set()
     training_counts: Counter[str] = Counter()
     source_rows: dict[str, int] = {}
@@ -273,7 +274,9 @@ def build_item_row(source_row: Mapping[str, Any]) -> dict[str, Any]:
     details = source_row.get("details")
     details = details if isinstance(details, dict) else {}
     description = "\n".join(normalize_string_list(source_row.get("description")))
-    brand = normalize_text(details.get("Brand")) or normalize_text(source_row.get("store"))
+    brand = normalize_text(details.get("Brand")) or normalize_text(
+        source_row.get("store")
+    )
     return {
         "parent_asin": source_row["parent_asin"],
         "title": normalize_text(source_row.get("title")),
@@ -357,9 +360,9 @@ def select_reviews(
     if max_reviews_per_item <= 0:
         raise ValueError("--max-reviews-per-item must be greater than zero")
 
-    general_heaps: dict[
-        str, list[tuple[tuple[int, int, int], int, dict[str, Any]]]
-    ] = defaultdict(list)
+    general_heaps: dict[str, list[tuple[tuple[int, int, int], int, dict[str, Any]]]] = (
+        defaultdict(list)
+    )
     low_rating_heaps: dict[
         str, list[tuple[tuple[int, int, int], int, dict[str, Any]]]
     ] = defaultdict(list)
@@ -419,9 +422,12 @@ def select_reviews(
         "missing_text_rows": missing_text_rows,
         "eligible_text_rows": eligible_text_rows,
         "retained_rows": len(selected_reviews),
-        "filtered_by_limit_or_duplicate_rows": eligible_text_rows - len(selected_reviews),
+        "filtered_by_limit_or_duplicate_rows": eligible_text_rows
+        - len(selected_reviews),
         "items_with_reviews": len({row["parent_asin"] for row in selected_reviews}),
-        "low_rating_rows_retained": sum(row["rating"] <= 2.0 for row in selected_reviews),
+        "low_rating_rows_retained": sum(
+            row["rating"] <= 2.0 for row in selected_reviews
+        ),
     }
 
 
