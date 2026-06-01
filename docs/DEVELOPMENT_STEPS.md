@@ -343,7 +343,24 @@ scripts/build_product_index.py
 
 ### 功能
 
-- 将标题、品牌、描述和属性拼成商品文档。
+- 将商品元数据按以下固定顺序拼成基础商品文档：
+
+  ```text
+  Title
+  -> Brand
+  -> Main Category
+  -> Categories
+  -> Features
+  -> Details
+  -> Description
+  ```
+
+- E5、BLaIR 和 BM25 复用同一份基础商品文档。`main_category` 只用于提供检索文本，
+  不作为清洗目录或硬过滤商品的依据。
+- Dense 编码时不使用字符数硬截断。分别使用 E5 和 BLaIR 自己的 tokenizer，按照
+  各自模型 token 上限自动截断尾部内容。由于高价值字段位于文档前部，优先保留标题、
+  品牌、类目、特征和属性，最后截断较长的描述。
+- 构建索引时分别记录两个 tokenizer 的 token 长度分布、发生截断的商品数和截断比例。
 - 使用 `intfloat/e5-small-v2` 和 `hyp1231/blair-roberta-base`
   分别生成商品向量，完成零微调对比。
 - `e5-small-v2` 使用 `query:` 和 `passage:` 前缀生成归一化向量。该模型只处理英文

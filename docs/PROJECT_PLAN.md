@@ -174,6 +174,21 @@ score(item) = 训练集中与商品相关的交互次数
 
 ### 6.2 Dense + BM25 混合检索
 
+- E5、BLaIR 和 BM25 复用同一份基础商品文档。字段顺序固定为：
+
+  ```text
+  Title
+  -> Brand
+  -> Main Category
+  -> Categories
+  -> Features
+  -> Details
+  -> Description
+  ```
+
+- `main_category` 只作为检索文本，不用于清洗目录或执行硬过滤。
+- Dense 编码时使用各模型 tokenizer 按模型 token 上限自动截断尾部内容，并记录
+  token 长度分布、截断商品数和截断比例。不额外使用固定字符数截断。
 - Dense 分别使用 `intfloat/e5-small-v2` 和
   `hyp1231/blair-roberta-base` 建立独立索引，完成零微调对比。
 - E5 和 BLaIR 都以英文查询和英文商品文档作为主要处理对象。
