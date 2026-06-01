@@ -1,0 +1,13 @@
+model,split,users,Recall@10,NDCG@10,HitRate@10,gcn_parameters,last_10_epoch_losses
+popularity,valid,14308,0.120422,0.062792,0.120422,,
+popularity,test,13466,0.110501,0.056813,0.110501,,
+lightgcn,valid,14308,0.139852,0.077184,0.139852,legacy: parameters not recorded,legacy: losses not recorded
+lightgcn,test,13466,0.119635,0.064125,0.119635,legacy: parameters not recorded,legacy: losses not recorded
+lightgcn,valid,14308,0.139852,0.077184,0.139852,"{""epochs"":30}",legacy: losses not recorded
+lightgcn,test,13466,0.119635,0.064125,0.119635,"{""epochs"":30}",legacy: losses not recorded
+lightgcn,valid,14308,0.132583,0.073013,0.132583,"{""epochs"":50}",legacy: losses not recorded
+lightgcn,test,13466,0.111540,0.061369,0.111540,"{""epochs"":50}",legacy: losses not recorded
+lightgcn,valid,14308,0.086176,0.048827,0.086176,"{""embedding_dim"":128,""epochs"":50,""learning_rate"":0.05}",legacy: losses not recorded
+lightgcn,test,13466,0.073296,0.039996,0.073296,"{""embedding_dim"":128,""epochs"":50,""learning_rate"":0.05}",legacy: losses not recorded
+lightgcn,valid,14308,0.088901,0.050886,0.088901,"{""embedding_dim"":128,""epochs"":30,""learning_rate"":0.05}",legacy: losses not recorded
+lightgcn,test,13466,0.076192,0.041713,0.076192,"{""embedding_dim"":128,""epochs"":30,""learning_rate"":0.05}",legacy: losses not recorded

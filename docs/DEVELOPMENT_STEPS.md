@@ -246,28 +246,76 @@ git commit -m "feat: add hard filters"
 
 ## 阶段 5：LightGCN
 
+### 使用依赖
+
+```text
+CUDA 版 PyTorch
+torch-geometric
+```
+
+使用 PyTorch Geometric（PyG）提供的
+`torch_geometric.nn.models.LightGCN`。直接读取阶段 2 生成的 Parquet
+交互数据，并复用阶段 3 已有的时间切分和指标口径。
+
+阶段 5 开始开发前，先根据本机显卡和驱动版本，从 PyTorch 官方安装页面选择匹配的
+CUDA 版 PyTorch 安装命令。不要继续使用 CPU 版 PyTorch 训练 LightGCN。安装完成后
+执行以下命令，确认 PyTorch 能够识别 CUDA 和本机显卡：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade --force-reinstall torch --index-url https://download.pytorch.org/whl/cu126
+.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CUDA unavailable')"
+```
+
+以上安装命令适用于当前开发机。其他机器必须根据显卡和驱动版本调整 CUDA wheel
+通道。验收前必须确认 `torch.cuda.is_available()` 返回 `True`，并记录实际使用的
+GPU 名称。
+
 ### 编写文件
 
 ```text
 scripts/train_lightgcn.py
 cartwise/retrieval/lightgcn.py
+tests/test_lightgcn.py
 ```
 
 ### 步骤
 
-1. 使用 RecBole 在小样本上训练。
-2. 验证可以保存模型。
-3. 验证可以加载模型并执行推理。
-4. 评估 LightGCN 指标。
-5. 与 Popularity 指标对比。
+1. 从 `interactions_train.parquet` 构建用户和商品 ID 映射。
+2. 仅使用训练集交互构建用户-商品二部图，不允许验证集和测试集边进入训练图。
+3. 使用 PyG `LightGCN`、BPR loss 和负样本训练，在开发小样本上先跑通 GPU 训练。
+4. 保存模型权重、模型配置、用户和商品 ID 映射以及训练历史商品集合。
+5. 加载已保存模型并执行 Top K 推理，排除用户已经交互过的商品。
+6. 每个 epoch 完成后立即在终端打印一次 loss，便于观察训练过程。
+7. 分批评估验证集和测试集，将 LightGCN 指标追加写入 CSV，不覆盖历史实验结果。
+8. 在 LightGCN 指标 CSV 中增加 `gcn_parameters` 列，并将同口径 Popularity 基线固定
+   放在最前面，便于直接对比。
 
-当前 CPU 版 PyTorch 足够开发。处理完整数据和正式训练前，再安装官方 CUDA 版 PyTorch。
+开发样本用于验证训练、保存、加载、推理和评估链路，不用于证明最终模型增益。
+阶段 5 即使用与本机显卡匹配的官方 CUDA 版 PyTorch 完成实现和开发样本训练，
+避免阶段 12 正式训练前再修改设备选择、模型保存加载或批量评估代码。全量数据训练和
+正式指标对比仍留到阶段 12。
+
+训练脚本必须显式支持 `device` 配置，并在请求使用 CUDA 但 CUDA 不可用时立即报错，
+不要静默回退到 CPU。模型保存加载、Top K 推理和批量评估必须使用同一套设备选择逻辑。
+Tiny Graph 单元测试可以使用 CPU，以便快速验证算法边界；开发样本训练和阶段验收必须
+使用 GPU。
+
+当前开发机已验证 `torch==2.12.0+cu126` 和 `torch-geometric==2.7.0` 可以使用
+`NVIDIA GeForce GTX 1660 Ti` 完成开发样本 GPU 训练、保存、加载、Top K 推理和
+分批评估。开发样本包含 `40,945` 个训练用户、`500` 个商品和 `101,713` 条训练交互。
 
 ### 验收
 
 - 给定 `user_id` 可以返回未交互过的 Top K 商品。
-- 生成 LightGCN 指标 CSV。
-- 能够与 Popularity 基线比较。
+- 未知用户返回空列表，冷启动 Popularity fallback 留到阶段 7。
+- 模型保存后重新加载，给定相同输入能够执行推理。
+- 生成 `reports/metrics/dev/lightgcn.csv`。
+- 能够与 `reports/metrics/dev/popularity.csv` 使用相同指标口径比较。
+- `reports/metrics/dev/lightgcn.csv` 首行数据为 Popularity 基线，后续 LightGCN
+  实验结果按训练顺序追加，并记录 `gcn_parameters`。
+- 每个 epoch 完成后终端立即输出本轮 loss。
+- 测试覆盖历史商品排除、未知用户、保存加载和 Tiny Graph CPU 冒烟。
+- CUDA 可用性检查通过，开发样本训练使用 GPU 完成，不允许静默回退到 CPU。
 
 ### 提交
 
@@ -287,6 +335,7 @@ git commit -m "feat: add lightgcn recommender"
 ### 编写文件
 
 ```text
+cartwise/core/llm.py
 cartwise/retrieval/dense.py
 cartwise/retrieval/bm25.py
 scripts/build_product_index.py
@@ -295,19 +344,45 @@ scripts/build_product_index.py
 ### 功能
 
 - 将标题、品牌、描述和属性拼成商品文档。
-- 使用 `intfloat/multilingual-e5-small` 生成向量。
-- Dense 索引写入 Qdrant。
+- 使用 `intfloat/e5-small-v2` 和 `hyp1231/blair-roberta-base`
+  分别生成商品向量，完成零微调对比。
+- `e5-small-v2` 使用 `query:` 和 `passage:` 前缀生成归一化向量。该模型只处理英文
+  文本。
+- `blair-roberta-base` 使用官方模型卡约定的归一化 `[CLS]` 向量。该模型面向英文
+  Amazon Reviews 2023 商品检索。
+- 两个模型使用独立 Qdrant collection，不能混用向量。
 - BM25 索引保存在本地。
-- 支持中文查询召回英文商品。
+- 用户输入包含中文字符时，先调用 LLM 翻译为英文，再将英文查询交给 Dense 和 BM25。
+- 中文检测只使用正则表达式 `[\u4e00-\u9fff]` 做轻量判断；翻译提示词只要求将购物
+  搜索查询翻译为英文并返回译文，
+  不要求 JSON，不解析结构化约束，不做复杂查询改写。
+- 翻译提示词保持固定：
+
+  ```text
+  Translate the following shopping search query into English.
+  Return only the translation without explanation:
+  {query}
+  ```
+
+- 英文查询直接进入 Dense 和 BM25，不调用 LLM。
+- LLM 未配置、超时或翻译结果为空时明确报错，不将中文查询静默传给英文检索模型。
+- 阶段 6 不接入 ESCI 数据集，不微调 Embedding 模型。
 
 ### 验收查询
 
 ```text
+guitar tuner for beginners
+portable microphone stand for home recording
+
 适合初学者的吉他调音器
-家庭录音使用的便携麦克风支架
 ```
 
-检查检索结果是否包含语义合理的英文商品。
+检查并记录：
+
+- E5 和 BLaIR 对英文查询召回的商品是否语义合理。
+- 中文查询能够通过最小 LLM 翻译层转换为英文，并进入相同检索链路。
+- 两个模型的 Top K 结果可以由人工对比，选择一期默认 Dense 模型。
+- 阶段 6 不建立复杂评估集，不在当前阶段进行 Embedding 微调。
 
 ### 提交
 
@@ -397,6 +472,7 @@ cartwise/core/orchestrator.py
 
 ### LLM 职责
 
+- 在阶段 6 最小查询翻译函数的基础上扩展可替换的 LLM 适配层。
 - 将自然语言解析为价格、品牌和属性约束。
 - 基于已有商品和评论生成中文解释。
 

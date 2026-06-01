@@ -4,10 +4,11 @@ pydantic-settings
 python-dotenv
 qdrant-client
 httpx
+httpx2
 pytest
-recbole
 streamlit 
 sentence-transformers 
 rank-bm25 
 openai 
 pyarrow
+torch-geometric

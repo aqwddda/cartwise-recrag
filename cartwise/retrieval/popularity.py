@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pyarrow.parquet as pq
 
@@ -25,7 +25,19 @@ class RankingMetrics:
     hit_rate: float
 
 
-def _group_items_by_user(interactions: Iterable[Interaction]) -> dict[str, set[str]]:
+class Recommender(Protocol):
+    """Common recommendation interface used by offline metrics."""
+
+    def recommend(
+        self,
+        user_id: str,
+        *,
+        k: int = 10,
+        excluded_items: Iterable[str] = (),
+    ) -> list[str]: ...
+
+
+def group_items_by_user(interactions: Iterable[Interaction]) -> dict[str, set[str]]:
     items_by_user: dict[str, set[str]] = defaultdict(set)
     for interaction in interactions:
         items_by_user[interaction["user_id"]].add(interaction["parent_asin"])
@@ -91,20 +103,16 @@ def _discounted_gain(recommendations: list[str], relevant_items: set[str]) -> fl
     )
 
 
-def evaluate_recommender(
-    recommender: PopularityRecommender,
-    target_interactions: Iterable[Interaction],
+def ranking_metrics_from_recommendations(
+    targets_by_user: Mapping[str, set[str]],
+    recommendations_by_user: Mapping[str, list[str]],
     *,
-    k: int = 10,
-    additional_history: Iterable[Interaction] = (),
+    k: int,
 ) -> RankingMetrics:
-    """Evaluate recommendations while excluding interactions known before the split."""
+    """Calculate ranking metrics from recommendations produced by any model."""
 
     if k <= 0:
         raise ValueError("k must be greater than zero")
-
-    targets_by_user = _group_items_by_user(target_interactions)
-    history_by_user = _group_items_by_user(additional_history)
     if not targets_by_user:
         return RankingMetrics(users=0, recall=0.0, ndcg=0.0, hit_rate=0.0)
 
@@ -112,11 +120,7 @@ def evaluate_recommender(
     ndcg = 0.0
     hit_rate = 0.0
     for user_id, relevant_items in targets_by_user.items():
-        recommendations = recommender.recommend(
-            user_id,
-            k=k,
-            excluded_items=history_by_user.get(user_id, ()),
-        )
+        recommendations = recommendations_by_user.get(user_id, [])
         hits = relevant_items.intersection(recommendations)
         recall += len(hits) / len(relevant_items)
         hit_rate += float(bool(hits))
@@ -132,4 +136,32 @@ def evaluate_recommender(
         recall=recall / users,
         ndcg=ndcg / users,
         hit_rate=hit_rate / users,
+    )
+
+
+def evaluate_recommender(
+    recommender: Recommender,
+    target_interactions: Iterable[Interaction],
+    *,
+    k: int = 10,
+    additional_history: Iterable[Interaction] = (),
+) -> RankingMetrics:
+    """Evaluate recommendations while excluding interactions known before the split."""
+
+    if k <= 0:
+        raise ValueError("k must be greater than zero")
+
+    targets_by_user = group_items_by_user(target_interactions)
+    history_by_user = group_items_by_user(additional_history)
+    recommendations_by_user: dict[str, list[str]] = {}
+    for user_id, relevant_items in targets_by_user.items():
+        recommendations_by_user[user_id] = recommender.recommend(
+            user_id,
+            k=k,
+            excluded_items=history_by_user.get(user_id, ()),
+        )
+    return ranking_metrics_from_recommendations(
+        targets_by_user,
+        recommendations_by_user,
+        k=k,
     )

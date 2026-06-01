@@ -55,8 +55,16 @@ def resolve_paths(
 def metrics_row(
     split: str, metrics: RankingMetrics, *, k: int
 ) -> dict[str, str | int]:
+    return format_metrics_row("popularity", split, metrics, k=k)
+
+
+def format_metrics_row(
+    model: str, split: str, metrics: RankingMetrics, *, k: int
+) -> dict[str, str | int]:
+    """Format metrics consistently across recommendation models."""
+
     return {
-        "model": "popularity",
+        "model": model,
         "split": split,
         "users": metrics.users,
         f"Recall@{k}": f"{metrics.recall:.6f}",
@@ -66,22 +74,25 @@ def metrics_row(
 
 
 def write_metrics_csv(
-    output: Path, rows: list[dict[str, str | int]], *, k: int
+    output: Path,
+    rows: list[dict[str, str | int]],
+    *,
+    k: int,
+    extra_fieldnames: list[str] | None = None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_suffix(f"{output.suffix}.part")
     with partial.open("w", newline="", encoding="utf-8") as output_file:
-        writer = csv.DictWriter(
-            output_file,
-            fieldnames=[
+        fieldnames = [
                 "model",
                 "split",
                 "users",
                 f"Recall@{k}",
                 f"NDCG@{k}",
                 f"HitRate@{k}",
-            ],
-        )
+        ]
+        fieldnames.extend(extra_fieldnames or [])
+        writer = csv.DictWriter(output_file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     partial.replace(output)

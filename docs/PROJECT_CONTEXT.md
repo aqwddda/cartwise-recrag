@@ -56,7 +56,7 @@ Keep two separate retrieval indexes:
 
 ## Suggested Technology Stack
 
-- recommendation baseline: RecBole with Popularity, BPR, and LightGCN
+- recommendation baseline: Popularity and PyTorch Geometric LightGCN, with BPR as an optional comparison
 - optional sequential model: SASRec
 - text embedding: BGE-M3 or a lightweight Sentence Transformer
 - hybrid retrieval and metadata filtering: Qdrant plus BM25

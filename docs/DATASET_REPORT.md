@@ -81,6 +81,42 @@ validation results, and retained review evidence counts.
 
 Chronology validation passed across 172,317 shared-user comparisons.
 
+## Training User Interaction Distribution
+
+`interactions_train.parquet` contains `396,958` interactions from `57,439`
+users and covers `24,556` products. There are no duplicate user-product pairs,
+so the number of interaction rows per user equals the number of distinct
+interacted products per user.
+
+| Metric | Interacted products per user |
+|---|---:|
+| Mean | 6.91 |
+| Standard deviation | 7.29 |
+| Minimum | 3 |
+| P10 | 3 |
+| P25 | 3 |
+| Median (P50) | 5 |
+| P75 | 8 |
+| P90 | 13 |
+| P95 | 18 |
+| P99 | 36 |
+| Maximum | 286 |
+| Mode | 3 |
+
+| Interacted products per user | Users | User ratio |
+|---|---:|---:|
+| 3 | 16,965 | 29.54% |
+| 4-5 | 17,281 | 30.09% |
+| 6-9 | 13,306 | 23.17% |
+| 10-19 | 7,466 | 13.00% |
+| 20-49 | 2,194 | 3.82% |
+| 50-99 | 195 | 0.34% |
+| 100 or more | 32 | 0.06% |
+
+`P25 = 3` means that at least 25% of users interacted with no more than three
+products in the training split. In total, `82.79%` of users interacted with
+fewer than ten products.
+
 ## Missing Fields
 
 | Artifact | Field | Missing rows | Missing ratio |

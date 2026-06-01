@@ -92,7 +92,7 @@ flowchart TD
 |---|---|
 | Popularity | 提供最低成本基线，并为冷启动用户兜底 |
 | LightGCN | 根据用户历史交互学习个性化偏好 |
-| Dense 检索 | 理解中文请求与英文商品文本之间的语义相关性 |
+| Dense 检索 | 对比英文通用 E5 与英文电商领域 BLaIR，召回符合当前需求的商品 |
 | BM25 检索 | 识别品牌、型号、接口和乐器名称等精确关键词 |
 | 硬过滤器 | 确保价格、品牌和属性约束不会被排序模型绕过 |
 | 评论证据 RAG | 为推荐理由和潜在缺点提供可追溯依据 |
@@ -174,9 +174,18 @@ score(item) = 训练集中与商品相关的交互次数
 
 ### 6.2 Dense + BM25 混合检索
 
-- Dense 使用 `intfloat/multilingual-e5-small`，支持中文查询和英文商品文本之间的跨语言语义匹配。
-- BM25 使用 LLM 提取或规则生成的英文关键词，匹配品牌、型号和明确术语。
-- 商品 Dense 索引写入 Qdrant，BM25 建立本地持久化索引。
+- Dense 分别使用 `intfloat/e5-small-v2` 和
+  `hyp1231/blair-roberta-base` 建立独立索引，完成零微调对比。
+- E5 和 BLaIR 都以英文查询和英文商品文档作为主要处理对象。
+- BLaIR 面向英文 Amazon Reviews 2023 商品检索，用于检查电商领域模型相对通用
+  英文模型的收益。
+- BM25 使用英文查询，匹配品牌、型号和明确术语。
+- 两个商品 Dense 索引分别写入独立 Qdrant collection，BM25 建立本地持久化索引。
+- 用户输入包含中文字符时，先调用 LLM 将查询直接翻译为英文，再进入相同的 Dense
+  和 BM25 检索链路。翻译提示词保持简单，只返回英文译文，不做结构化输出或复杂改写。
+- 英文查询不调用 LLM。翻译失败时明确报错，不静默回退到英文模型处理中文原文。
+- 阶段 6 不接入 ESCI，不微调 Embedding 模型。使用少量人工编写的英文查询对比
+  E5 和 BLaIR，选择一期默认 Dense 模型。
 - 一期商品索引规模约 24.6K 条。
 
 ### 6.3 评论证据控制
@@ -214,8 +223,8 @@ score(item) = 训练集中与商品相关的交互次数
 | 层级 | 技术 |
 |---|---|
 | 推荐模型 | Popularity、LightGCN，BPR 可选 |
-| 推荐框架 | 优先 RecBole，失败时切换最小 PyTorch LightGCN |
-| 向量模型 | `intfloat/multilingual-e5-small` |
+| 推荐框架 | PyTorch Geometric（PyG）LightGCN |
+| 向量模型 | `intfloat/e5-small-v2`、`hyp1231/blair-roberta-base` |
 | 向量库 | Qdrant Docker，临时兜底为 Qdrant 本地持久化模式 |
 | 关键词检索 | BM25 |
 | 后端 | FastAPI |
@@ -233,14 +242,20 @@ score(item) = 训练集中与商品相关的交互次数
 - 下载依赖和数据时使用代理 `http://127.0.0.1:9508`。
 - 实施前确认磁盘至少预留 10GB。
 
-### 8.2 依赖风险兜底
+### 8.2 LightGCN 实现约束
 
-RecBole 的依赖组合在 Python 3.12 上可能存在兼容性风险。为避免阻塞两周冲刺：
+阶段 5 使用 PyTorch Geometric（PyG）提供的
+`torch_geometric.nn.models.LightGCN`，直接读取项目已有 Parquet 数据。
+不因框架选择改变官方时间切分、指标口径和在线接口。
 
-1. Day 1 对 RecBole 做安装和训练冒烟测试。
-2. 排查时间限制为 2 小时。
-3. 超过时间盒后切换项目内最小 PyTorch LightGCN 实现。
-4. 不因框架兼容问题改变数据集、指标和在线接口。
+当前环境已验证 `torch==2.12.0+cu126` 和 `torch-geometric==2.7.0` 可以在 Python
+`3.12.9`、CUDA `12.6` 和 `NVIDIA GeForce GTX 1660 Ti` 上完成 LightGCN 导入、
+图传播、BPR loss、反向传播、训练、保存加载、Top K 推荐和分批评估。开发样本包含
+`40,945` 个训练用户、`500` 个商品和 `101,713` 条训练交互。当前 LightGCN 路径
+不需要额外安装 PyG 编译扩展。
+
+训练脚本必须显式支持设备选择。请求 CUDA 但 CUDA 不可用时立即报错，不允许静默
+回退到 CPU。保持数据集、指标和在线接口不变。
 
 ## 9. 对外接口
 
@@ -316,10 +331,10 @@ README.md
 
 | 日期 | 工作内容 | 当日验收 |
 |---|---|---|
-| Day 1 | 处理 Git safe-directory 警告；安装 Docker Desktop；启动 Qdrant；验证 Python 3.12、RecBole 和 LLM 接口 | `/health` 可检查 Qdrant；RecBole 冒烟成功或启用 PyTorch fallback |
+| Day 1 | 处理 Git safe-directory 警告；安装 Docker Desktop；启动 Qdrant；验证 Python 3.12、PyG LightGCN 和 LLM 接口 | `/health` 可检查 Qdrant；PyG LightGCN GPU 冒烟成功 |
 | Day 2 | 编写下载与预处理脚本；生成小样本和完整 5-core 处理产物；关联元数据和评论 | 输出数据质量报告，包含缺失字段和过滤比例 |
 | Day 3 | 实现 Popularity；训练 LightGCN；运行小样本离线评估 | 输出 Recall@10、NDCG@10、HitRate@10 基线 CSV |
-| Day 4 | 构建商品文档；接入多语言 Embedding；建立 Qdrant 商品索引和 BM25 索引 | 中文查询能够检索合理英文商品 |
+| Day 4 | 构建商品文档；对比 E5 与 BLaIR；建立独立 Qdrant 商品索引和 BM25 索引；增加最小中文翻译层 | 英文人工查询对比完成；中文查询可翻译后进入英文检索链路 |
 | Day 5 | 实现候选融合、硬过滤和冷启动 fallback | 已知用户和冷启动用户均能返回符合约束的 Top 5 |
 | Day 6 | 构建评论证据索引；实现按商品过滤的证据检索；生成稳定引用 ID | 每个推荐商品返回最多 3 条真实评论引用 |
 | Day 7 | 接入 LLM 意图解析和解释生成；实现 JSON 校验与模板回退 | LLM 不可用或输出异常时仍可返回合法结果 |
@@ -372,7 +387,8 @@ README.md
 1. 统计并接入 `bought_together` 共购图一跳扩展。
 2. 加入轻量 CrossEncoder，对较小候选集执行重排。
 3. 增加冷启动分桶分析。
-4. 建立中文查询测试集，评估 Dense、BM25 和混合检索效果。
+4. 使用人工编写的英文查询检查 Dense、BM25 和混合检索效果，并保留少量中文输入验证
+   LLM 翻译链路。
 5. 对比有无 Dense、BM25、共购扩展和重排的消融实验。
 6. 将会话状态迁移到 Redis。
 7. 评估 `BGE-M3` 等更强嵌入模型。
@@ -400,7 +416,7 @@ README.md
 
 - 当前 Git 仓库存在 ownership 警告，实施时确认目录来源后处理 safe-directory 配置。
 - 当前电脑尚未安装 Docker，首日需要完成安装验证。
-- Python 3.12 下 RecBole 可能存在兼容性问题，必须执行时间盒并保留 PyTorch fallback。
+- 阶段 5 开始前需要验证 PyG 与 CUDA 版 PyTorch 的兼容性；请求 CUDA 但不可用时禁止静默回退到 CPU。
 - 禁止批量删除文件或目录。需要清理大量数据时，由用户手动执行。
 - 真实 API 密钥只能放入未提交的 `.env` 文件。
 - 两周内优先完成可测闭环，不引入复杂多智能体架构。
@@ -412,5 +428,6 @@ README.md
 - [Amazon Reviews 2023 官方仓库](https://github.com/hyp1231/AmazonReviews2023)
 - [Qdrant 本地 Docker 快速开始](https://qdrant.tech/documentation/quick-start/)
 - [Qdrant Python Client Quickstart](https://python-client.qdrant.tech/quickstart.html)
-- [multilingual-e5-small 模型卡](https://huggingface.co/intfloat/multilingual-e5-small)
-- [RecBole 官方安装说明](https://recbole.io/cn/install.html)
+- [e5-small-v2 模型卡](https://huggingface.co/intfloat/e5-small-v2)
+- [blair-roberta-base 模型卡](https://huggingface.co/hyp1231/blair-roberta-base)
+- [PyTorch Geometric LightGCN 文档](https://pytorch-geometric.readthedocs.io/en/latest/generated/torch_geometric.nn.models.LightGCN.html)
