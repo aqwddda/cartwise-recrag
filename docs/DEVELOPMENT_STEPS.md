@@ -47,6 +47,7 @@ scripts/
     evaluate_popularity.py
     train_lightgcn.py
     build_product_dense_index.py
+    build_product_bm25_index.py
     build_evidence_index.py
   tools/
     generate_data_quality_report.py
@@ -72,7 +73,8 @@ requirements.txt
 .\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
 .\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
-.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair bm25
 ```
 
 自动生成且可重复构建的索引报告、分析报告和预览统一写入 `artifacts/`，不提交 Git。
@@ -320,6 +322,14 @@ tests/test_lightgcn.py
 Tiny Graph 单元测试可以使用 CPU，以便快速验证算法边界；开发样本训练和阶段验收必须
 使用 GPU。
 
+需要对同一个已保存模型补充多个 Top K 指标时，使用仅评估模式，不要重新训练：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full --evaluate-only --k 10 50
+```
+
+该命令加载已有 `lightgcn.pt`，将多组指标合并后直接追加写入同一个 LightGCN CSV。
+
 当前开发机已验证 `torch==2.12.0+cu126` 和 `torch-geometric==2.7.0` 可以使用
 `NVIDIA GeForce GTX 1660 Ti` 完成开发样本 GPU 训练、保存、加载、Top K 推理和
 分批评估。开发样本包含 `40,945` 个训练用户、`500` 个商品和 `101,713` 条训练交互。
@@ -359,6 +369,7 @@ cartwise/core/llm.py
 cartwise/retrieval/dense.py
 cartwise/retrieval/bm25.py
 scripts/pipeline/build_product_dense_index.py
+scripts/pipeline/build_product_bm25_index.py
 ```
 
 ### 功能
@@ -425,7 +436,8 @@ portable microphone stand for home recording
 模型：
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels popularity lightgcn e5 blair
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels popularity lightgcn e5 blair bm25
 ```
 
 每轮召回分别生成 HTML 和 JSON，默认保存到：

@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from cartwise.core.config import Settings
 from cartwise.core.llm import QueryTranslationError, create_query_translator
+from cartwise.retrieval.bm25 import BM25Index, BM25Retriever
 from cartwise.retrieval.dense import (
     DENSE_MODEL_SPECS,
     DenseRetriever,
@@ -22,6 +23,7 @@ from cartwise.retrieval.lightgcn import LightGCNRecommender
 from cartwise.retrieval.popularity import PopularityRecommender
 from scripts.paths import (
     MODELS_ROOT,
+    PRODUCT_BM25_ARTIFACT_ROOT,
     PROCESSED_ROOTS,
     RETRIEVAL_AUDIT_ARTIFACT_ROOT,
 )
@@ -30,10 +32,9 @@ from scripts.tools.item_metadata import load_items_by_parent_asin
 
 
 EXIT_COMMANDS = {":exit", ":quit", "exit", "quit"}
-QUERY_CHANNELS = ("e5", "blair")
+QUERY_CHANNELS = ("e5", "blair", "bm25")
 USER_CHANNELS = ("popularity", "lightgcn")
 UNAVAILABLE_CHANNELS = {
-    "bm25": "BM25 retrieval is not implemented yet",
     "fusion": "stage-seven fusion is not implemented yet",
 }
 CHANNELS = (*USER_CHANNELS, *QUERY_CHANNELS, *UNAVAILABLE_CHANNELS)
@@ -170,6 +171,37 @@ class DenseAuditChannel:
         return []
 
 
+class BM25AuditChannel:
+    input_type = "query"
+
+    def __init__(
+        self,
+        retriever: BM25Retriever,
+        items_by_parent_asin: Mapping[str, dict[str, Any]],
+    ) -> None:
+        self.retriever = retriever
+        self.items_by_parent_asin = items_by_parent_asin
+
+    def recall(self, value: str, *, k: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "channel": "bm25",
+                "rank": rank,
+                "parent_asin": result["parent_asin"],
+                "score": result["bm25_score"],
+                "score_type": "bm25_score",
+                "item": _item(self.items_by_parent_asin, result["parent_asin"]),
+                "retrieval_query": result["retrieval_query"],
+                "document": result["document"],
+            }
+            for rank, result in enumerate(self.retriever.search(value, k=k), start=1)
+        ]
+
+    def history(self, value: str) -> list[dict[str, Any]]:
+        del value
+        return []
+
+
 def load_channels(
     *,
     scope: str,
@@ -200,10 +232,18 @@ def load_channels(
             items_by_parent_asin,
         )
 
-    dense_names = [name for name in channel_names if name in QUERY_CHANNELS]
+    translator = LazySettingsQueryTranslator()
+    if "bm25" in channel_names:
+        index_path = PRODUCT_BM25_ARTIFACT_ROOT / scope / "bm25.json.gz"
+        print(f"Loading bm25: {index_path}")
+        channels["bm25"] = BM25AuditChannel(
+            BM25Retriever(BM25Index.load(index_path), translator=translator),
+            items_by_parent_asin,
+        )
+
+    dense_names = [name for name in channel_names if name in DENSE_MODEL_SPECS]
     if dense_names:
         client = create_qdrant_client(qdrant_url)
-        translator = LazySettingsQueryTranslator()
         for model_key in dense_names:
             collection = collection_name(scope, model_key)
             info = client.get_collection(collection)

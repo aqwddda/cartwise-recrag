@@ -73,19 +73,21 @@ def write_metrics_csv(
     rows: list[dict[str, str | int]],
     *,
     k: int,
+    additional_ks: list[int] | None = None,
     extra_fieldnames: list[str] | None = None,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_suffix(f"{output.suffix}.part")
     with partial.open("w", newline="", encoding="utf-8") as output_file:
-        fieldnames = [
-                "model",
-                "split",
-                "users",
-                f"Recall@{k}",
-                f"NDCG@{k}",
-                f"HitRate@{k}",
-        ]
+        fieldnames = ["model", "split", "users"]
+        for metric_k in dict.fromkeys([*(additional_ks or []), k]):
+            fieldnames.extend(
+                [
+                    f"Recall@{metric_k}",
+                    f"NDCG@{metric_k}",
+                    f"HitRate@{metric_k}",
+                ]
+            )
         fieldnames.extend(extra_fieldnames or [])
         writer = csv.DictWriter(output_file, fieldnames=fieldnames)
         writer.writeheader()

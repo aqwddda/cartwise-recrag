@@ -350,7 +350,8 @@ README.md
 .\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
 .\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
-.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair bm25
 ```
 
 统一召回审核工具支持连续输入 `query <文本>` 或 `user <用户 ID>`，在同一进程中复用

@@ -130,10 +130,10 @@ def test_custom_output_prefix_is_reused_for_later_reports(tmp_path: Path) -> Non
 
 
 def test_load_channels_rejects_future_placeholders_before_loading_data() -> None:
-    with pytest.raises(ValueError, match="bm25: BM25 retrieval is not implemented yet"):
+    with pytest.raises(ValueError, match="fusion: stage-seven fusion is not implemented yet"):
         load_channels(
             scope="dev",
-            channel_names=["bm25"],
+            channel_names=["fusion"],
             qdrant_url="http://127.0.0.1:6333",
             device="cpu",
         )
