@@ -11,10 +11,11 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from scripts.paths import ARTIFACT_PREVIEWS_ROOT, PROCESSED_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INPUT = PROJECT_ROOT / "data" / "processed" / "items.parquet"
-DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "generated" / "items_preview_first_100.html"
+
+DEFAULT_INPUT = PROCESSED_ROOT / "items.parquet"
+DEFAULT_OUTPUT = ARTIFACT_PREVIEWS_ROOT / "items_preview_first_100.html"
 TOP_LEVEL_FIELDS = (
     "parent_asin",
     "title",

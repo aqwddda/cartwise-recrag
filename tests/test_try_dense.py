@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from scripts.try_dense import LazySettingsQueryTranslator, interactive_loop, search_all
+from scripts.tools.compare_dense_models import (
+    LazySettingsQueryTranslator,
+    interactive_loop,
+    search_all,
+)
 
 
 class FakeRetriever:
@@ -54,7 +58,7 @@ def test_lazy_translator_creates_external_client_only_when_used(monkeypatch) -> 
             return "guitar tuner"
 
     monkeypatch.setattr(
-        "scripts.try_dense.create_query_translator",
+        "scripts.tools.compare_dense_models.create_query_translator",
         lambda settings: FakeTranslator(),
     )
     translator = LazySettingsQueryTranslator()

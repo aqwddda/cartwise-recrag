@@ -16,9 +16,11 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RAW_ROOT = PROJECT_ROOT / "data" / "raw" / "amazon_reviews_2023"
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "data" / "processed"
+from scripts.paths import AMAZON_REVIEWS_RAW_ROOT, PROCESSED_ROOT
+
+
+DEFAULT_RAW_ROOT = AMAZON_REVIEWS_RAW_ROOT
+DEFAULT_OUTPUT_ROOT = PROCESSED_ROOT
 SPLIT_PATHS = {
     "train": "benchmark/5core/last_out_w_his/Musical_Instruments.train.csv.gz",
     "valid": "benchmark/5core/last_out_w_his/Musical_Instruments.valid.csv.gz",

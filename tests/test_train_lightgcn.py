@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from cartwise.retrieval.lightgcn import LightGCNConfig
-from scripts.train_lightgcn import (
+from scripts.pipeline.train_lightgcn import (
     LEGACY_LOSSES,
     LEGACY_PARAMETERS,
     LOSSES_COLUMN,

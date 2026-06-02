@@ -4,31 +4,26 @@ from __future__ import annotations
 
 import argparse
 import csv
-import sys
 from pathlib import Path
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from cartwise.retrieval.popularity import (  # noqa: E402
+from cartwise.retrieval.popularity import (
     PopularityRecommender,
     RankingMetrics,
     evaluate_recommender,
     load_interactions,
 )
+from scripts.paths import METRICS_ROOT, PROCESSED_ROOTS, PROJECT_ROOT
 
 
 DEFAULT_SCOPE = "dev"
 SCOPE_PATHS = {
     "dev": (
-        PROJECT_ROOT / "data" / "processed" / "dev",
-        PROJECT_ROOT / "reports" / "metrics" / "dev" / "popularity.csv",
+        PROCESSED_ROOTS["dev"],
+        METRICS_ROOT / "dev" / "popularity.csv",
     ),
     "full": (
-        PROJECT_ROOT / "data" / "processed",
-        PROJECT_ROOT / "reports" / "metrics" / "full" / "popularity.csv",
+        PROCESSED_ROOTS["full"],
+        METRICS_ROOT / "full" / "popularity.csv",
     ),
 }
 DEFAULT_PROCESSED_ROOT, DEFAULT_OUTPUT = SCOPE_PATHS[DEFAULT_SCOPE]

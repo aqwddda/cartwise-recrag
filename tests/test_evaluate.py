@@ -6,7 +6,11 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from scripts.evaluate import PROJECT_ROOT, evaluate_popularity, resolve_paths
+from scripts.pipeline.evaluate_popularity import (
+    PROJECT_ROOT,
+    evaluate_popularity,
+    resolve_paths,
+)
 
 
 def write_interactions(path: Path, rows: list[dict[str, str]]) -> None:

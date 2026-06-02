@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from cartwise.core.config import Settings  # noqa: E402
-from cartwise.core.llm import QueryTranslationError, create_query_translator  # noqa: E402
-from cartwise.retrieval.dense import (  # noqa: E402
+from cartwise.core.config import Settings
+from cartwise.core.llm import QueryTranslationError, create_query_translator
+from cartwise.retrieval.dense import (
     DENSE_MODEL_SPECS,
     DenseRetriever,
     collection_name,

@@ -9,20 +9,17 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from cartwise.retrieval.filters import (  # noqa: E402
+from cartwise.retrieval.filters import (
     FilterConstraints,
     apply_hard_filters,
     derive_category_tags,
     derive_color_tags,
     derive_material_tags,
 )
-from cartwise.retrieval.popularity import PopularityRecommender  # noqa: E402
+from cartwise.retrieval.popularity import PopularityRecommender
+from scripts.paths import PROCESSED_ROOT
 
-DEFAULT_PROCESSED_ROOT = PROJECT_ROOT / "data" / "processed"
+DEFAULT_PROCESSED_ROOT = PROCESSED_ROOT
 DEFAULT_USER_ID = "manual-filter-demo-user"
 RECALL_COUNT = 50
 

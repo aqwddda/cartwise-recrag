@@ -5,29 +5,25 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import sys
 from pathlib import Path
 
 import torch
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from cartwise.retrieval.lightgcn import (  # noqa: E402
+from cartwise.retrieval.lightgcn import (
     LightGCNConfig,
     LightGCNRecommender,
     evaluate_lightgcn_recommender,
     resolve_device,
     train_lightgcn,
 )
-from cartwise.retrieval.popularity import (  # noqa: E402
+from cartwise.retrieval.popularity import (
     PopularityRecommender,
     evaluate_recommender,
     load_interactions,
 )
-from scripts.evaluate import format_metrics_row, write_metrics_csv  # noqa: E402
+from scripts.paths import METRICS_ROOT, MODELS_ROOT, PROCESSED_ROOTS
+from scripts.pipeline.evaluate_popularity import format_metrics_row, write_metrics_csv
 
 
 DEFAULT_SCOPE = "dev"
@@ -45,14 +41,14 @@ DEFAULT_EVAL_BATCH_SIZE = 256
 DEFAULT_K = 10
 SCOPE_PATHS = {
     "dev": (
-        PROJECT_ROOT / "data" / "processed" / "dev",
-        PROJECT_ROOT / "models" / "lightgcn" / "dev" / "lightgcn.pt",
-        PROJECT_ROOT / "reports" / "metrics" / "dev" / "lightgcn.csv",
+        PROCESSED_ROOTS["dev"],
+        MODELS_ROOT / "lightgcn" / "dev" / "lightgcn.pt",
+        METRICS_ROOT / "dev" / "lightgcn.csv",
     ),
     "full": (
-        PROJECT_ROOT / "data" / "processed",
-        PROJECT_ROOT / "models" / "lightgcn" / "full" / "lightgcn.pt",
-        PROJECT_ROOT / "reports" / "metrics" / "full" / "lightgcn.csv",
+        PROCESSED_ROOTS["full"],
+        MODELS_ROOT / "lightgcn" / "full" / "lightgcn.pt",
+        METRICS_ROOT / "full" / "lightgcn.csv",
     ),
 }
 DEFAULT_PROCESSED_ROOT, DEFAULT_MODEL_OUTPUT, DEFAULT_METRICS_OUTPUT = SCOPE_PATHS[

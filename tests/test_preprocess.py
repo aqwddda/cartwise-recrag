@@ -9,7 +9,11 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from scripts.preprocess import parse_price, run_preprocessing, validate_chronology
+from scripts.pipeline.preprocess_amazon_reviews import (
+    parse_price,
+    run_preprocessing,
+    validate_chronology,
+)
 
 
 def write_csv_gzip(path: Path, rows: list[dict[str, str]]) -> None:

@@ -4,7 +4,6 @@ __pycache__/
 .pytest_cache/
 data/
 models/
-indexes/
-reports/generated/
+artifacts/
 reports/**/*.part
 AGENTS.md

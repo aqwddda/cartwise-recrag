@@ -40,14 +40,22 @@ cartwise/
   ui/
     app.py
 scripts/
-  download_data.py
-  preprocess.py
-  build_dev_sample.py
-  report_data_quality.py
-  train_lightgcn.py
-  build_product_index.py
-  build_evidence_index.py
-  evaluate.py
+  pipeline/
+    download_amazon_reviews.py
+    preprocess_amazon_reviews.py
+    build_dev_sample.py
+    evaluate_popularity.py
+    train_lightgcn.py
+    build_product_dense_index.py
+    build_evidence_index.py
+  tools/
+    generate_data_quality_report.py
+    export_items_preview.py
+    try_filters.py
+    compare_dense_models.py
+  experiments/
+    download_esci_examples.py
+    analyze_esci_overlap.py
 tests/
   test_health.py
   test_filters.py
@@ -57,6 +65,18 @@ tests/
 README.md
 requirements.txt
 ```
+
+脚本从仓库根目录使用模块方式运行。常用命令示例：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
+.\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
+.\.venv\Scripts\python.exe -m scripts.tools.compare_dense_models --scope full --models e5 blair
+```
+
+自动生成且可重复构建的索引报告、分析报告和预览统一写入 `artifacts/`，不提交 Git。
+用于对比历史实验的 CSV 指标保留在 `reports/metrics/` 并提交 Git。
 
 ## 阶段 1：最小 API
 
@@ -114,10 +134,10 @@ git commit -m "feat: add health endpoint"
 ### 编写文件
 
 ```text
-scripts/download_data.py
-scripts/preprocess.py
-scripts/build_dev_sample.py
-scripts/report_data_quality.py
+scripts/pipeline/download_amazon_reviews.py
+scripts/pipeline/preprocess_amazon_reviews.py
+scripts/pipeline/build_dev_sample.py
+scripts/tools/generate_data_quality_report.py
 ```
 
 ### 处理规则
@@ -166,7 +186,7 @@ git commit -m "feat: add data preprocessing pipeline"
 
 ```text
 cartwise/retrieval/popularity.py
-scripts/evaluate.py
+scripts/pipeline/evaluate_popularity.py
 ```
 
 ### 功能
@@ -273,7 +293,7 @@ GPU 名称。
 ### 编写文件
 
 ```text
-scripts/train_lightgcn.py
+scripts/pipeline/train_lightgcn.py
 cartwise/retrieval/lightgcn.py
 tests/test_lightgcn.py
 ```
@@ -338,7 +358,7 @@ git commit -m "feat: add lightgcn recommender"
 cartwise/core/llm.py
 cartwise/retrieval/dense.py
 cartwise/retrieval/bm25.py
-scripts/build_product_index.py
+scripts/pipeline/build_product_dense_index.py
 ```
 
 ### 功能
@@ -451,7 +471,7 @@ git commit -m "feat: add candidate fusion"
 ### 编写文件
 
 ```text
-scripts/build_evidence_index.py
+scripts/pipeline/build_evidence_index.py
 cartwise/retrieval/evidence.py
 tests/test_evidence.py
 ```

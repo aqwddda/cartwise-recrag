@@ -4,24 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-from cartwise.core.config import Settings  # noqa: E402
-from cartwise.core.llm import (  # noqa: E402
+from cartwise.core.config import Settings
+from cartwise.core.llm import (
     QueryTranslationError,
     contains_chinese_characters,
     create_query_translator,
 )
-from cartwise.retrieval.dense import (  # noqa: E402
+from cartwise.retrieval.dense import (
     DENSE_MODEL_SPECS,
     DenseRetriever,
     build_qdrant_collection,
@@ -29,13 +24,11 @@ from cartwise.retrieval.dense import (  # noqa: E402
     create_qdrant_client,
     load_dense_encoder,
 )
+from scripts.paths import PROCESSED_ROOTS, PRODUCT_DENSE_ARTIFACT_ROOT
 
 
-SCOPE_PATHS = {
-    "dev": PROJECT_ROOT / "data" / "processed" / "dev",
-    "full": PROJECT_ROOT / "data" / "processed",
-}
-DEFAULT_REPORT_ROOT = PROJECT_ROOT / "indexes" / "product_dense"
+SCOPE_PATHS = PROCESSED_ROOTS
+DEFAULT_REPORT_ROOT = PRODUCT_DENSE_ARTIFACT_ROOT
 
 
 def parse_args() -> argparse.Namespace:

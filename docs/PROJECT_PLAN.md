@@ -332,12 +332,25 @@ cartwise/
   core/             # 配置、推荐编排、会话状态、LLM 适配层
   retrieval/        # LightGCN、Popularity、Dense、BM25、证据检索
   ui/               # Streamlit
-scripts/            # 下载、清洗、建索引、训练、评估
+scripts/
+  pipeline/         # 可重复执行的下载、清洗、建索引、训练、评估流程
+  tools/            # 人工检查与调试工具
+  experiments/      # 当前阶段之外的探索脚本
 tests/              # 单元测试和集成测试
-reports/            # CSV 指标、Markdown 报告
+artifacts/          # 可再生成的索引报告、分析报告和预览，不提交 Git
+reports/metrics/    # 提交 Git 的 CSV 实验指标
 docker-compose.yml  # Qdrant
 .env.example        # 不包含真实密钥
 README.md
+```
+
+脚本从仓库根目录使用模块方式运行，例如：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
+.\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
+.\.venv\Scripts\python.exe -m scripts.tools.compare_dense_models --scope full --models e5 blair
 ```
 
 原始数据、处理后数据、模型权重、向量索引和真实密钥不得提交 Git。

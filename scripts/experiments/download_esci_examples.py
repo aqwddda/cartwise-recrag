@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
+from scripts.paths import AMAZON_ESCI_RAW_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = PROJECT_ROOT / "data" / "raw" / "amazon_esci"
+DATA_ROOT = AMAZON_ESCI_RAW_ROOT
 BASE_URL = (
     "https://github.com/amazon-science/esci-data/raw/main/"
     "shopping_queries_dataset"

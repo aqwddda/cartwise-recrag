@@ -5,10 +5,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from preprocess import DEFAULT_RAW_ROOT, PROJECT_ROOT, run_preprocessing
+from scripts.paths import DEV_PROCESSED_ROOT
+from scripts.pipeline.preprocess_amazon_reviews import (
+    DEFAULT_RAW_ROOT,
+    run_preprocessing,
+)
 
 
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "data" / "processed" / "dev"
+DEFAULT_OUTPUT_ROOT = DEV_PROCESSED_ROOT
 
 
 def parse_args() -> argparse.Namespace:

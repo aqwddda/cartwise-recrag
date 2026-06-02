@@ -10,9 +10,11 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PROCESSED_ROOT = PROJECT_ROOT / "data" / "processed"
-DEFAULT_OUTPUT = PROJECT_ROOT / "reports" / "generated" / "data_quality.md"
+from scripts.paths import ARTIFACT_REPORTS_ROOT, PROCESSED_ROOT
+
+
+DEFAULT_PROCESSED_ROOT = PROCESSED_ROOT
+DEFAULT_OUTPUT = ARTIFACT_REPORTS_ROOT / "data_quality.md"
 
 
 def parse_args() -> argparse.Namespace:

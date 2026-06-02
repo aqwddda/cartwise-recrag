@@ -12,27 +12,26 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from scripts.paths import (
+    AMAZON_ESCI_RAW_ROOT,
+    AMAZON_REVIEWS_RAW_ROOT,
+    ARTIFACT_REPORTS_ROOT,
+    PROCESSED_ROOT,
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ESCI_EXAMPLES = (
-    PROJECT_ROOT
-    / "data"
-    / "raw"
-    / "amazon_esci"
+    AMAZON_ESCI_RAW_ROOT
     / "shopping_queries_dataset_examples.parquet"
 )
-DEFAULT_ITEMS = PROJECT_ROOT / "data" / "processed" / "items.parquet"
+DEFAULT_ITEMS = PROCESSED_ROOT / "items.parquet"
 DEFAULT_REVIEWS = (
-    PROJECT_ROOT
-    / "data"
-    / "raw"
-    / "amazon_reviews_2023"
+    AMAZON_REVIEWS_RAW_ROOT
     / "raw"
     / "review_categories"
     / "Musical_Instruments.jsonl.gz"
 )
-DEFAULT_OUTPUT_JSON = PROJECT_ROOT / "reports" / "generated" / "esci_overlap.json"
-DEFAULT_OUTPUT_MD = PROJECT_ROOT / "reports" / "generated" / "esci_overlap.md"
+DEFAULT_OUTPUT_JSON = ARTIFACT_REPORTS_ROOT / "esci_overlap.json"
+DEFAULT_OUTPUT_MD = ARTIFACT_REPORTS_ROOT / "esci_overlap.md"
 ESCI_COLUMNS = ("query_id", "query", "product_id", "product_locale", "esci_label", "split")
 TARGET_LOCALE = "us"
 

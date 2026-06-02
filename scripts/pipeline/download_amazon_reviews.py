@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
+from scripts.paths import AMAZON_REVIEWS_RAW_ROOT
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = PROJECT_ROOT / "data" / "raw" / "amazon_reviews_2023"
+DATA_ROOT = AMAZON_REVIEWS_RAW_ROOT
 BASE_URL = "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_2023"
 FILES = (
     "raw/review_categories/Musical_Instruments.jsonl.gz",

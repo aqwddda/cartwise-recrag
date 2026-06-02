@@ -79,8 +79,8 @@ ESCI.product_id
 当前已生成可复现的重叠分析脚本：
 
 ```text
-scripts/download_esci_examples.py
-scripts/report_esci_overlap.py
+scripts/experiments/download_esci_examples.py
+scripts/experiments/analyze_esci_overlap.py
 ```
 
 当前 CartWise 目录包含 `24,587` 个 `parent_asin`。ESCI-US 精确关联覆盖情况：
