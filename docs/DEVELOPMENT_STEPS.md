@@ -52,7 +52,7 @@ scripts/
     generate_data_quality_report.py
     export_items_preview.py
     try_filters.py
-    compare_dense_models.py
+    audit_retrieval.py
   experiments/
     download_esci_examples.py
     analyze_esci_overlap.py
@@ -72,7 +72,7 @@ requirements.txt
 .\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
 .\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
-.\.venv\Scripts\python.exe -m scripts.tools.compare_dense_models --scope full --models e5 blair
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair
 ```
 
 自动生成且可重复构建的索引报告、分析报告和预览统一写入 `artifacts/`，不提交 Git。
@@ -420,6 +420,20 @@ portable microphone stand for home recording
 - 中文查询能够通过最小 LLM 翻译层转换为英文，并进入相同检索链路。
 - 两个模型的 Top K 结果可以由人工对比，选择一期默认 Dense 模型。
 - 阶段 6 不建立复杂评估集，不在当前阶段进行 Embedding 微调。
+
+使用统一召回审核工具连续输入 `query <文本>` 或 `user <用户 ID>`，并复用已经加载的
+模型：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels popularity lightgcn e5 blair
+```
+
+每轮召回分别生成 HTML 和 JSON，默认保存到：
+
+```text
+artifacts/reports/retrieval_audit/<scope>/<timestamp>_<sequence>_<input-type>.html
+artifacts/reports/retrieval_audit/<scope>/<timestamp>_<sequence>_<input-type>.json
+```
 
 ### 提交
 

@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import pyarrow.parquet as pq
-
 from cartwise.retrieval.filters import (
     FilterConstraints,
     apply_hard_filters,
@@ -18,6 +16,7 @@ from cartwise.retrieval.filters import (
 )
 from cartwise.retrieval.popularity import PopularityRecommender
 from scripts.paths import PROCESSED_ROOT
+from scripts.tools.item_metadata import load_items_by_parent_asin
 
 DEFAULT_PROCESSED_ROOT = PROCESSED_ROOT
 DEFAULT_USER_ID = "manual-filter-demo-user"
@@ -56,21 +55,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_items_by_parent_asin(path: Path) -> dict[str, dict[str, Any]]:
-    columns = [
-        "parent_asin",
-        "title",
-        "brand",
-        "price",
-        "categories",
-        "details_json",
-    ]
-    return {
-        item["parent_asin"]: item
-        for item in pq.read_table(path, columns=columns).to_pylist()
-    }
-
-
 def format_tags(tags: set[str]) -> str:
     return ", ".join(sorted(tags)) or "-"
 
@@ -98,7 +82,17 @@ def main() -> None:
 
     recommender = PopularityRecommender.from_parquet(training_path)
     recalled_parent_asins = recommender.recommend(args.user_id, k=RECALL_COUNT)
-    items_by_parent_asin = load_items_by_parent_asin(items_path)
+    items_by_parent_asin = load_items_by_parent_asin(
+        items_path,
+        columns=[
+            "parent_asin",
+            "title",
+            "brand",
+            "price",
+            "categories",
+            "details_json",
+        ],
+    )
     recalled_items = [
         items_by_parent_asin[parent_asin]
         for parent_asin in recalled_parent_asins

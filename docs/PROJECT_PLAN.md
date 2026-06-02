@@ -350,8 +350,12 @@ README.md
 .\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
 .\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
-.\.venv\Scripts\python.exe -m scripts.tools.compare_dense_models --scope full --models e5 blair
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair
 ```
+
+统一召回审核工具支持连续输入 `query <文本>` 或 `user <用户 ID>`，在同一进程中复用
+已加载模型。每轮审核报告分别保存到
+`artifacts/reports/retrieval_audit/<scope>/` 下的 HTML 和 JSON 文件。
 
 原始数据、处理后数据、模型权重、向量索引和真实密钥不得提交 Git。
 
