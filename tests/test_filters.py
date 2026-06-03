@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
-
-import pytest
 
 from cartwise.retrieval.filters import (
     FilterConstraints,
     apply_hard_filters,
     derive_category_tags,
+    load_brand_alias_to_canonical,
+    load_item_to_categories,
+    resolve_filter_constraints,
 )
 
 
@@ -31,35 +33,82 @@ def make_item(
     }
 
 
-@pytest.fixture(autouse=True)
-def allowed_leaf_categories(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "cartwise.retrieval.filters.load_allowed_leaf_categories",
-        lambda: frozenset({"stands", "instrument cables"}),
-    )
-
-
-def test_derive_category_tags_uses_allowed_leaf_category_only() -> None:
+def test_derive_category_tags_uses_all_product_categories() -> None:
     title_only = make_item("P1", title="Clip-On Guitar Tuner")
-    allowed_leaf = make_item(
+    categorized = make_item(
         "P2",
         categories=["Musical Instruments", "Microphones & Accessories", "Stands"],
     )
-    disallowed_leaf = make_item(
-        "P3",
-        categories=["Musical Instruments", "Instrument Accessories", "Tools"],
-    )
 
     assert derive_category_tags(title_only) == set()
-    assert derive_category_tags(allowed_leaf) == {"stands"}
-    assert derive_category_tags(disallowed_leaf) == set()
+    assert derive_category_tags(categorized) == {
+        "musical instruments",
+        "microphones & accessories",
+        "stands",
+    }
 
 
-def test_category_constraint_excludes_items_without_matching_tags() -> None:
+def test_resolve_filter_constraints_maps_llm_terms_through_offline_tables() -> None:
+    constraints = resolve_filter_constraints(
+        product_terms=["electric guitar", "unknown product"],
+        brands=["fender", "unknown brand"],
+        excluded_brands=["not shure"],
+        min_price=10,
+        max_price=20,
+        color_tags=["black"],
+        material_tags=["wood"],
+        item_to_categories={"electric guitar": "Guitars"},
+        brand_alias_to_canonical={"fender": "Fender", "not shure": "Shure"},
+    )
+
+    assert tuple(constraints.category_tags) == ("Guitars",)
+    assert constraints.min_price == 10
+    assert constraints.max_price == 20
+    assert tuple(constraints.brands) == ("Fender",)
+    assert tuple(constraints.excluded_brands) == ("Shure",)
+    assert tuple(constraints.color_tags) == ("black",)
+    assert tuple(constraints.material_tags) == ("wood",)
+
+
+def test_offline_mapping_loaders_normalize_keys_and_keep_canonical_values(
+    tmp_path: Path,
+) -> None:
+    item_path = tmp_path / "item_to_categories.json"
+    brand_path = tmp_path / "brand_alias_to_canonical.json"
+    item_path.write_text(
+        json.dumps({" Electric Guitar ": "Guitars", "bad": ""}),
+        encoding="utf-8",
+    )
+    brand_path.write_text(
+        json.dumps({" FENDER ": "Fender", "bad": ""}),
+        encoding="utf-8",
+    )
+
+    assert load_item_to_categories(item_path) == {"electric guitar": "Guitars"}
+    assert load_brand_alias_to_canonical(brand_path) == {"fender": "Fender"}
+
+
+def test_resolve_filter_constraints_allows_explicit_empty_mapping() -> None:
+    constraints = resolve_filter_constraints(
+        product_terms=["electric guitar"],
+        brands=["fender"],
+        item_to_categories={},
+        brand_alias_to_canonical={},
+    )
+
+    assert tuple(constraints.category_tags) == ()
+    assert tuple(constraints.brands) == ()
+
+
+def test_category_constraint_matches_any_category_by_substring() -> None:
     candidates = [
         make_item(
             "MATCH",
-            categories=["Musical Instruments", "Microphones & Accessories", "Stands"],
+            categories=[
+                "Musical Instruments",
+                "Instrument Accessories",
+                "General Accessories",
+            ],
         ),
         make_item("MISSING"),
         make_item(
@@ -74,23 +123,23 @@ def test_category_constraint_excludes_items_without_matching_tags() -> None:
 
     filtered = apply_hard_filters(
         candidates,
-        FilterConstraints(category_tags={" STANDS "}),
+        FilterConstraints(category_tags={" Accessories "}),
     )
 
     assert [item["parent_asin"] for item in filtered] == ["MATCH"]
 
 
-def test_category_constraint_rejects_leaf_categories_outside_stage_seven_table() -> None:
+def test_category_constraint_rejects_when_no_category_contains_tag() -> None:
     candidates = [
         make_item(
-            "DISALLOWED",
+            "OTHER",
             categories=["Musical Instruments", "Instrument Accessories", "Tools"],
         ),
     ]
 
     filtered = apply_hard_filters(
         candidates,
-        FilterConstraints(category_tags={"tools"}),
+        FilterConstraints(category_tags={"stands"}),
     )
 
     assert filtered == []

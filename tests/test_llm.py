@@ -5,11 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 from cartwise.core.llm import (
+    OpenAICompatibleQueryIntentParser,
     OpenAICompatibleQueryTranslator,
+    QueryIntentError,
     QueryTranslationError,
+    build_intent_prompt,
     build_translation_prompt,
     contains_chinese_characters,
     prepare_search_query,
+    validate_query_intent,
 )
 from cartwise.core.config import Settings
 
@@ -84,6 +88,152 @@ def test_openai_compatible_adapter_uses_fixed_prompt() -> None:
         ],
         "temperature": 0,
     }
+
+
+def test_openai_compatible_intent_parser_requests_strict_json() -> None:
+    request: dict[str, object] = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            request.update(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                '{"product_terms":["guitar tuner"],"min_price":null,'
+                                '"max_price":50,"brands":[],"excluded_brands":'
+                                '["Fender"],"color_tags":["black"],'
+                                '"material_tags":["plastic"]}'
+                            )
+                        )
+                    )
+                ]
+            )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    parser = OpenAICompatibleQueryIntentParser(
+        client,
+        model="deepseek-chat",
+    )
+
+    intent = parser.parse("guitar tuner under $50 not Fender")
+
+    assert intent.search_query == "guitar tuner under $50 not Fender"
+    assert intent.product_terms == ("guitar tuner",)
+    assert intent.filters.max_price == 50.0
+    assert tuple(intent.filters.excluded_brands) == ("Fender",)
+    assert tuple(intent.filters.color_tags) == ("black",)
+    assert tuple(intent.filters.material_tags) == ("plastic",)
+    assert request == {
+        "model": "deepseek-chat",
+        "messages": [
+            {
+                "role": "user",
+                "content": build_intent_prompt(
+                    "guitar tuner under $50 not Fender",
+                ),
+            }
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "extra_body": {"thinking": {"type": "disabled"}},
+    }
+
+
+def test_validate_query_intent_reuses_translation_for_chinese_search_query() -> None:
+    translator = FakeTranslator("guitar tuner for beginners")
+
+    intent = validate_query_intent(
+        "适合初学者的吉他调音器",
+        {
+            "search_query": "hallucinated rewrite",
+            "product_terms": ["吉他调音器"],
+            "min_price": None,
+            "max_price": None,
+            "brands": [],
+            "excluded_brands": [],
+            "color_tags": [],
+            "material_tags": [],
+        },
+        translator=translator,
+    )
+
+    assert intent.search_query == "guitar tuner for beginners"
+    assert intent.product_terms == ("吉他调音器",)
+    assert translator.queries == ["适合初学者的吉他调音器"]
+
+
+def test_validate_query_intent_ignores_llm_rewrite_for_english_search_query() -> None:
+    intent = validate_query_intent(
+        "clip-on guitar tuner under $30 not Fender",
+        {
+            "search_query": "guitar tuner",
+            "product_terms": ["clip-on guitar tuner"],
+            "max_price": 30,
+            "excluded_brands": ["Fender"],
+        },
+    )
+
+    assert intent.search_query == "clip-on guitar tuner under $30 not Fender"
+    assert intent.product_terms == ("clip-on guitar tuner",)
+    assert intent.filters.max_price == 30.0
+    assert tuple(intent.filters.excluded_brands) == ("Fender",)
+
+
+def test_validate_query_intent_keeps_raw_llm_terms_without_vocabulary_matching() -> None:
+    intent = validate_query_intent(
+        "black wood guitar strap not fender",
+        {
+            "product_terms": ["guitar strap", "Imaginary Category"],
+            "brands": ["Acme"],
+            "excluded_brands": ["Fndr", "Unknown"],
+            "color_tags": [" black "],
+            "material_tags": ["wood"],
+        },
+    )
+
+    assert intent.product_terms == ("guitar strap", "Imaginary Category")
+    assert tuple(intent.filters.brands) == ("Acme",)
+    assert tuple(intent.filters.excluded_brands) == ("Fndr", "Unknown")
+    assert tuple(intent.filters.color_tags) == ("black",)
+    assert tuple(intent.filters.material_tags) == ("wood",)
+
+
+def test_validate_query_intent_uses_llm_price_without_regex_override() -> None:
+    intent = validate_query_intent(
+        "microphone stand between $20 and $40",
+        {"min_price": 1, "max_price": 999},
+    )
+
+    assert intent.filters.min_price == 1.0
+    assert intent.filters.max_price == 999.0
+
+
+def test_invalid_intent_schema_is_rejected() -> None:
+    with pytest.raises(QueryIntentError, match="schema validation"):
+        validate_query_intent(
+            "guitar tuner",
+            {"min_price": 50, "max_price": 10},
+        )
+
+
+def test_invalid_intent_json_is_rejected() -> None:
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="not json"))]
+            )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    parser = OpenAICompatibleQueryIntentParser(client, model="deepseek-chat")
+
+    with pytest.raises(QueryIntentError, match="invalid JSON"):
+        parser.parse("guitar tuner")
 
 
 def test_google_key_uses_the_openai_compatible_gemini_fallback() -> None:

@@ -15,12 +15,17 @@ from typing import Any, TypeVar
 Candidate = TypeVar("Candidate", bound=Mapping[str, Any])
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_LEAF_CATEGORY_TABLE_PATH = (
+DEFAULT_ITEM_TO_CATEGORIES_PATH = (
     PROJECT_ROOT
-    / "artifacts"
-    / "reports"
-    / "category_stats"
-    / "filter_leaf_categories_top250.txt"
+    / "data"
+    / "processed"
+    / "item_to_categories.json"
+)
+DEFAULT_BRAND_ALIAS_TO_CANONICAL_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "brand_alias_to_canonical.json"
 )
 
 
@@ -62,6 +67,100 @@ def _normalize_strings(values: Collection[str]) -> frozenset[str]:
         normalized
         for value in values
         if (normalized := normalize_string(value)) is not None
+    )
+
+
+def _load_json_mapping(path: Path) -> Mapping[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, Mapping) else {}
+
+
+@lru_cache(maxsize=8)
+def load_item_to_categories(path: Path | None = None) -> dict[str, str]:
+    """Load product-term aliases mapped to canonical category tags."""
+
+    source = path or DEFAULT_ITEM_TO_CATEGORIES_PATH
+    return {
+        normalized_key: str(value).strip()
+        for key, value in _load_json_mapping(source).items()
+        if (normalized_key := normalize_string(key)) is not None
+        and isinstance(value, str)
+        and value.strip()
+    }
+
+
+@lru_cache(maxsize=8)
+def load_brand_alias_to_canonical(path: Path | None = None) -> dict[str, str]:
+    """Load brand aliases mapped to canonical product brands."""
+
+    source = path or DEFAULT_BRAND_ALIAS_TO_CANONICAL_PATH
+    return {
+        normalized_key: str(value).strip()
+        for key, value in _load_json_mapping(source).items()
+        if (normalized_key := normalize_string(key)) is not None
+        and isinstance(value, str)
+        and value.strip()
+    }
+
+
+def _resolve_aliases(
+    values: Collection[str],
+    alias_to_canonical: Mapping[str, str],
+) -> tuple[str, ...]:
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = normalize_string(value)
+        if normalized is None:
+            continue
+        canonical = alias_to_canonical.get(normalized)
+        canonical_normalized = normalize_string(canonical)
+        if canonical is None or canonical_normalized is None:
+            continue
+        if canonical_normalized in seen:
+            continue
+        resolved.append(canonical)
+        seen.add(canonical_normalized)
+    return tuple(resolved)
+
+
+def resolve_filter_constraints(
+    *,
+    product_terms: Collection[str] = (),
+    brands: Collection[str] = (),
+    excluded_brands: Collection[str] = (),
+    min_price: float | None = None,
+    max_price: float | None = None,
+    color_tags: Collection[str] = (),
+    material_tags: Collection[str] = (),
+    item_to_categories: Mapping[str, str] | None = None,
+    brand_alias_to_canonical: Mapping[str, str] | None = None,
+) -> FilterConstraints:
+    """Map raw LLM intent fields to final filter constraints."""
+
+    category_aliases = (
+        load_item_to_categories()
+        if item_to_categories is None
+        else item_to_categories
+    )
+    brand_aliases = (
+        load_brand_alias_to_canonical()
+        if brand_alias_to_canonical is None
+        else brand_alias_to_canonical
+    )
+    return FilterConstraints(
+        category_tags=_resolve_aliases(product_terms, category_aliases),
+        min_price=min_price,
+        max_price=max_price,
+        brands=_resolve_aliases(brands, brand_aliases),
+        excluded_brands=_resolve_aliases(excluded_brands, brand_aliases),
+        color_tags=color_tags,
+        material_tags=material_tags,
     )
 
 
@@ -115,22 +214,8 @@ def _iter_text_values(value: Any) -> Iterator[str]:
             yield from _iter_text_values(item)
 
 
-@lru_cache(maxsize=8)
-def load_allowed_leaf_categories(path: Path | None = None) -> frozenset[str]:
-    """Load the stage-seven leaf category allowlist as normalized category names."""
-
-    source = path or DEFAULT_LEAF_CATEGORY_TABLE_PATH
-    if not source.exists():
-        return frozenset()
-    return frozenset(
-        normalized
-        for line in source.read_text(encoding="utf-8").splitlines()
-        if (normalized := normalize_string(line)) is not None
-    )
-
-
 def derive_category_tags(item: Mapping[str, Any]) -> set[str]:
-    """Derive stage-seven category tags from the product's allowed leaf category."""
+    """Derive normalized category strings from all product categories."""
 
     categories = item.get("categories")
     if not isinstance(categories, Collection) or isinstance(
@@ -138,19 +223,11 @@ def derive_category_tags(item: Mapping[str, Any]) -> set[str]:
         (str, bytes, Mapping),
     ):
         return set()
-    leaf_category = next(
-        (
-            normalized
-            for value in reversed(list(categories))
-            if (normalized := normalize_string(value)) is not None
-        ),
-        None,
-    )
-    if leaf_category is None:
-        return set()
-    if leaf_category not in load_allowed_leaf_categories():
-        return set()
-    return {leaf_category}
+    return {
+        normalized
+        for value in categories
+        if (normalized := normalize_string(value)) is not None
+    }
 
 
 def _derive_detail_tags(item: Mapping[str, Any], keys: Iterable[str]) -> set[str]:
@@ -182,13 +259,27 @@ def _read_price(item: Mapping[str, Any]) -> float | None:
     return price if math.isfinite(price) else None
 
 
+def _matches_category_constraints(
+    item: Mapping[str, Any],
+    category_tags: frozenset[str],
+) -> bool:
+    if not category_tags:
+        return True
+    item_categories = derive_category_tags(item)
+    if not item_categories:
+        return False
+    return any(
+        category_tag in item_category
+        for category_tag in category_tags
+        for item_category in item_categories
+    )
+
+
 def _matches_constraints(
     item: Mapping[str, Any],
     constraints: _NormalizedConstraints,
 ) -> bool:
-    if constraints.category_tags and not constraints.category_tags.issubset(
-        derive_category_tags(item)
-    ):
+    if not _matches_category_constraints(item, constraints.category_tags):
         return False
 
     has_price_constraint = (
