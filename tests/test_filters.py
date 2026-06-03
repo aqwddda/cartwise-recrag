@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 from cartwise.retrieval.filters import (
     FilterConstraints,
     apply_hard_filters,
@@ -29,32 +31,69 @@ def make_item(
     }
 
 
-def test_derive_category_tags_recognizes_demo_products_from_supported_sources() -> None:
-    guitar_tuner = make_item("P1", title="Clip-On Guitar Tuner")
-    microphone_stand = make_item(
-        "P2",
-        categories=["Studio Recording Equipment", "Microphone Stands"],
+@pytest.fixture(autouse=True)
+def allowed_leaf_categories(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "cartwise.retrieval.filters.load_allowed_leaf_categories",
+        lambda: frozenset({"stands", "instrument cables"}),
     )
-    guitar_accessory = make_item("P3", details={"Instrument": "Guitar"})
 
-    assert derive_category_tags(guitar_tuner) >= {"guitar", "tuner"}
-    assert derive_category_tags(microphone_stand) >= {"microphone", "stand"}
-    assert derive_category_tags(guitar_accessory) >= {"guitar"}
+
+def test_derive_category_tags_uses_allowed_leaf_category_only() -> None:
+    title_only = make_item("P1", title="Clip-On Guitar Tuner")
+    allowed_leaf = make_item(
+        "P2",
+        categories=["Musical Instruments", "Microphones & Accessories", "Stands"],
+    )
+    disallowed_leaf = make_item(
+        "P3",
+        categories=["Musical Instruments", "Instrument Accessories", "Tools"],
+    )
+
+    assert derive_category_tags(title_only) == set()
+    assert derive_category_tags(allowed_leaf) == {"stands"}
+    assert derive_category_tags(disallowed_leaf) == set()
 
 
 def test_category_constraint_excludes_items_without_matching_tags() -> None:
     candidates = [
-        make_item("MATCH", title="Guitar Tuner"),
+        make_item(
+            "MATCH",
+            categories=["Musical Instruments", "Microphones & Accessories", "Stands"],
+        ),
         make_item("MISSING"),
-        make_item("OTHER", title="Microphone Stand"),
+        make_item(
+            "OTHER",
+            categories=[
+                "Musical Instruments",
+                "Live Sound & Stage",
+                "Instrument Cables",
+            ],
+        ),
     ]
 
     filtered = apply_hard_filters(
         candidates,
-        FilterConstraints(category_tags={"guitar", "tuner"}),
+        FilterConstraints(category_tags={" STANDS "}),
     )
 
     assert [item["parent_asin"] for item in filtered] == ["MATCH"]
+
+
+def test_category_constraint_rejects_leaf_categories_outside_stage_seven_table() -> None:
+    candidates = [
+        make_item(
+            "DISALLOWED",
+            categories=["Musical Instruments", "Instrument Accessories", "Tools"],
+        ),
+    ]
+
+    filtered = apply_hard_filters(
+        candidates,
+        FilterConstraints(category_tags={"tools"}),
+    )
+
+    assert filtered == []
 
 
 def test_missing_category_is_allowed_without_category_constraint() -> None:

@@ -4,21 +4,24 @@ from __future__ import annotations
 
 import json
 import math
-import re
+from functools import lru_cache
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from numbers import Real
+from pathlib import Path
 from typing import Any, TypeVar
 
 
 Candidate = TypeVar("Candidate", bound=Mapping[str, Any])
 
-CATEGORY_ALIASES: Mapping[str, tuple[str, ...]] = {
-    "guitar": ("guitar", "guitars"),
-    "tuner": ("tuner", "tuners"),
-    "microphone": ("microphone", "microphones", "mic", "mics"),
-    "stand": ("stand", "stands"),
-}
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_LEAF_CATEGORY_TABLE_PATH = (
+    PROJECT_ROOT
+    / "artifacts"
+    / "reports"
+    / "category_stats"
+    / "filter_leaf_categories_top250.txt"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,28 +115,42 @@ def _iter_text_values(value: Any) -> Iterator[str]:
             yield from _iter_text_values(item)
 
 
-def _matches_alias(text: str, alias: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", text) is not None
+@lru_cache(maxsize=8)
+def load_allowed_leaf_categories(path: Path | None = None) -> frozenset[str]:
+    """Load the stage-seven leaf category allowlist as normalized category names."""
+
+    source = path or DEFAULT_LEAF_CATEGORY_TABLE_PATH
+    if not source.exists():
+        return frozenset()
+    return frozenset(
+        normalized
+        for line in source.read_text(encoding="utf-8").splitlines()
+        if (normalized := normalize_string(line)) is not None
+    )
 
 
 def derive_category_tags(item: Mapping[str, Any]) -> set[str]:
-    """Derive controlled category tags from the title, categories, and instrument."""
+    """Derive stage-seven category tags from the product's allowed leaf category."""
 
-    details = _load_details(item)
-    sources = [
-        *_iter_text_values(item.get("title")),
-        *_iter_text_values(item.get("categories")),
-        *_iter_text_values(details.get("Instrument")),
-    ]
-    return {
-        tag
-        for tag, aliases in CATEGORY_ALIASES.items()
-        if any(
-            _matches_alias(source, alias)
-            for source in sources
-            for alias in aliases
-        )
-    }
+    categories = item.get("categories")
+    if not isinstance(categories, Collection) or isinstance(
+        categories,
+        (str, bytes, Mapping),
+    ):
+        return set()
+    leaf_category = next(
+        (
+            normalized
+            for value in reversed(list(categories))
+            if (normalized := normalize_string(value)) is not None
+        ),
+        None,
+    )
+    if leaf_category is None:
+        return set()
+    if leaf_category not in load_allowed_leaf_categories():
+        return set()
+    return {leaf_category}
 
 
 def _derive_detail_tags(item: Mapping[str, Any], keys: Iterable[str]) -> set[str]:

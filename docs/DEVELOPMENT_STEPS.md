@@ -473,6 +473,7 @@ git commit -m "feat: add hybrid product retrieval"
 ### 编写文件
 
 ```text
+cartwise/core/llm.py
 cartwise/retrieval/fusion.py
 tests/test_fusion.py
 ```
@@ -480,8 +481,8 @@ tests/test_fusion.py
 ### 功能
 
 阶段 7 处理带自然语言 query 的导购推荐。Dense 和 BM25 是当前 query 的主要搜索召回
-通道；LightGCN 和 Popularity 提供个性化与热门度补充，但不能绕过 query 相关性门控
-直接进入最终候选池。
+通道；LightGCN 和 Popularity 提供个性化与热门度补充。阶段 7 直接接入 LLM 做 query
+意图解析，但只解析搜索文本和显式硬约束，不生成推荐理由，不维护多轮会话状态。
 
 使用 weighted Reciprocal Rank Fusion 合并候选，默认权重调整为：
 
@@ -490,37 +491,114 @@ tests/test_fusion.py
 | 已知用户   | Dense `0.45`、BM25 `0.25`、LightGCN `0.25`、Popularity `0.05` |
 | 冷启动用户 | Dense `0.65`、BM25 `0.30`、Popularity `0.05`                  |
 
-类目相关性分为两个层次：
+LLM 解析结果必须使用固定结构，并在写入 `FilterConstraints` 前进行校验。`category_tags`
+只能从阶段 7 叶子类目表中选择；`brands` 和 `excluded_brands` 必须回到商品品牌集合或
+别名表中校验；价格必须是明确数字约束。阶段 7 不建立颜色和材质受控词表，LLM 可以直接
+输出颜色和材质字符串，过滤时沿用阶段 4 的商品 metadata 精确匹配逻辑。LLM 不确定时
+返回空约束，不要为了补全字段而猜测。
 
 ```text
-宽泛商品类型：
-  microphone_stand、guitar_strings、tuner 等受控标签
-  -> 可用于 LightGCN 和 Popularity 补充候选的 query 相关性门控
-
-细粒度形态和使用场景：
-  boom_arm、desk_mounted、broadcast、podcast 等
-  -> 保留给 Dense、BM25 和后续排序，不直接作为类目硬过滤条件
+{
+  "search_query": "guitar tuner for beginners",
+  "filters": {
+    "category_tags": ["guitar", "tuner"],
+    "min_price": null,
+    "max_price": 50,
+    "brands": [],
+    "excluded_brands": ["fender"],
+    "color_tags": [],
+    "material_tags": []
+  }
+}
 ```
 
-Dense 和 BM25 已经根据原始 query 检索商品，不执行宽泛商品类型门控，避免由于商品标签
-覆盖不完整或同义词归一化不足误删有效搜索结果。例如 `microphone arm` 查询召回的
-`desk-mounted broadcast microphone boom stand` 应保留。
+阶段 7 叶子类目表位于：
 
-LightGCN 和 Popularity 与当前 query 无直接关系。只有在能够高置信度解析出宽泛商品
-类型时，才允许使用通过该类型门控的 LightGCN 和 Popularity 候选补充搜索结果。如果
-无法高置信度解析宽泛商品类型，则本轮 query 只使用 Dense 和 BM25 候选，不添加
-LightGCN 或 Popularity 独有候选。
+```text
+artifacts/reports/category_stats/filter_leaf_categories_top250.txt
+```
 
-价格、指定品牌、排除品牌、颜色和材料仍属于用户明确约束，在融合后对全部候选统一
-执行硬过滤。类目门控只控制 LightGCN 和 Popularity 补充候选是否与 query 的宽泛商品
-类型一致，不替代阶段 4 已有硬过滤器，也不对 Dense 和 BM25 结果做字符串匹配过滤。
+该文件从全量商品 `categories` 的 Top 250 叶子类目中筛选得到，只保留适合作为商品类目
+硬过滤的类目名称。当前类目表只是一行一个类目名，不包含 JSON 元数据。后续开发读取时
+应保留原始大小写用于展示和提示词，比较时使用 `strip + casefold` 归一化。
+
+阶段 7 的 LLM 意图解析优先适配 DeepSeek。`cartwise/core/config.py` 已提供
+`DEEPSEEK_API_KEY`、`deepseek_base_url` 和 `deepseek_model` 配置，默认模型为
+`deepseek-v4-flash`。实现真实 LLM 解析器时使用 OpenAI-compatible chat completions
+接口，并在 DeepSeek 请求中显式关闭 thinking 模式，避免结构化输出被思考内容污染：
+
+```python
+client.chat.completions.create(
+    model=settings.llm_model,
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0,
+    response_format={"type": "json_object"},
+    extra_body={"thinking": {"type": "disabled"}},
+)
+```
+
+如果 OpenAI SDK 的 `response_format` 或 DeepSeek thinking 参数行为发生兼容问题，先保留
+`extra_body={"thinking": {"type": "disabled"}}`，再降级为提示词要求只返回 JSON，并用
+本地 JSON 解析和字段校验兜底。手动测试 DeepSeek 时从 `.env` 或环境变量读取
+`DEEPSEEK_API_KEY`，不要把 API Key 写入代码、文档或提交记录。下载依赖或访问外部 API
+时使用代理 `http://127.0.0.1:9508`，访问 `127.0.0.1` 和 `localhost` 时绕过代理。
+
+各字段解析规则：
+
+- `search_query`：用于 Dense 和 BM25 的英文检索文本。中文 query 先复用阶段 6 翻译
+  能力，再进入检索；阶段 7 不做复杂 query 改写。
+- `category_tags`：需要 LLM 从
+  `artifacts/reports/category_stats/filter_leaf_categories_top250.txt` 中选择，主要用于
+  LightGCN 和 Popularity 的完整硬过滤。不要让 LLM 生成词表外标签；如果无法明确匹配
+  类目表中的类目，返回空列表。
+- `min_price` 和 `max_price`：规则优先解析明确数字表达，例如 `under $50`、`不超过
+  100`、`20 到 40`。LLM 可作为补充，但 `便宜`、`入门款` 这类模糊表达不能转成具体价格。
+- `brands`：需要 LLM 识别指定品牌，再通过品牌词表或别名表校验。
+- `excluded_brands`：需要 LLM 识别否定品牌表达，例如 `不要 Fender`、`not Shure`、
+  `avoid Behringer`，再通过品牌词表或别名表校验。
+- `color_tags`：阶段 7 不建立受控颜色词表。LLM 直接输出用户明确提到的颜色字符串，
+  过滤时沿用 `details_json["Color Name"]` 和 `details_json["Color"]` 的
+  `strip + casefold` 精确匹配。Dense 和 BM25 暂不应用颜色过滤。
+- `material_tags`：阶段 7 不建立受控材质词表。LLM 直接输出用户明确提到的材质字符串，
+  过滤时沿用 `details_json["Material Type"]` 和 `details_json["Material"]` 的
+  `strip + casefold` 精确匹配。Dense 和 BM25 暂不应用材质过滤。
+
+过滤策略按召回通道区分：
+
+- Dense 和 BM25 已经根据 query 检索商品，阶段 7 只对它们应用价格、指定品牌和
+  排除品牌硬过滤。类目、颜色、材质先保留解析接口，等后续人工测试确认过滤质量后再决定
+  是否启用。
+- LightGCN 和 Popularity 与当前 query 无直接语义关系。阶段 7 对它们应用完整
+  `FilterConstraints`，包括类目、价格、指定品牌、排除品牌、颜色和材质；其中类目
+  过滤是防止个性化和热门候选跑偏的主要机制。
+- 同一商品如果同时来自搜索召回和个性化召回，先合并来源，再按搜索召回侧的保守策略
+  判断是否保留，避免 Dense/BM25 的有效搜索结果被低覆盖率类目标签误删。
+
+阶段 7 的类目过滤不做复杂类目映射表，也不从标题、`features`、`description` 或
+`details_json` 中派生额外类目。商品类目只使用 `categories` 字段的叶子类目，也就是
+`categories[-1]`。比较规则如下：
+
+- LLM 输出的 `category_tags` 必须全部存在于阶段 7 叶子类目表；词表外输出直接丢弃。
+- 对 LightGCN 和 Popularity 候选，读取商品 `categories[-1]`，与 LLM 输出类目做
+  `strip + casefold` 后的直接相等匹配。
+- 如果 LLM 输出多个类目，商品叶子类目命中任意一个即可通过类目过滤。
+- 如果商品 `categories` 为空，或者叶子类目不在阶段 7 类目表中，则该商品不能通过
+  LightGCN/Popularity 的类目过滤。
+- 如果 LLM 没有解析出任何类目，阶段 7 不把 LightGCN/Popularity 的独有候选加入带
+  query 的融合池；Dense 和 BM25 仍正常召回并只做价格/品牌过滤。
+- Dense 和 BM25 不使用该类目表过滤，避免有效搜索结果被类目覆盖率和歧义问题误删。
+
+当前类目表由统计脚本临时产物提供，筛选前 Top 250 叶子类目覆盖有 `categories` 商品的
+约 `85.84%`。实现阶段如需更新类目表，应重新统计全量 `items.parquet` 的叶子类目频次，
+人工删除泛化类目、促销类目和属性词后再替换该文件。
 
 处理流程：
 
 ```text
-原始 query -> Dense + BM25 搜索召回
-宽泛商品类型 -> LightGCN + Popularity 补充候选门控
--> 去重 -> weighted RRF -> 明确约束硬过滤 -> Top 5
+原始 query -> LLM 解析 search_query 和显式约束
+search_query -> Dense + BM25 搜索召回 -> 价格/品牌过滤
+user_id -> LightGCN + Popularity 补充召回 -> 叶子类目表匹配 + 完整硬过滤
+去重合并来源 -> weighted RRF -> Top 5
 ```
 
 ### 验收
@@ -529,9 +607,14 @@ LightGCN 或 Popularity 独有候选。
 - 冷启动用户可以返回符合约束的 Top 5。
 - 同一商品不会重复出现。
 - 每个结果记录召回来源。
-- Dense 和 BM25 召回结果不会因为宽泛商品类型标签缺失而被门控删除。
-- LightGCN 和 Popularity 独有候选只有通过宽泛商品类型门控后才能进入带 query 的候选池。
-- 无法高置信度解析宽泛商品类型时，不向带 query 的候选池添加 LightGCN 或 Popularity 独有候选。
+- LLM 可以解析搜索文本、类目、价格、指定品牌和排除品牌，并对词表外结果做校验丢弃。
+- Dense 和 BM25 只应用价格、指定品牌和排除品牌过滤，不会因为类目、颜色或材质标签
+  缺失而被删除。
+- LightGCN 和 Popularity 独有候选必须通过阶段 7 叶子类目表匹配和完整硬过滤后才能
+  进入融合池。
+- LLM 未解析出类目时，不向带 query 的融合池添加 LightGCN/Popularity 独有候选。
+- 阶段 7 类目表路径和匹配规则在文档中固定，后续实现不得临时改为标题、features 或
+  description 字符串匹配。
 
 ### 提交
 
