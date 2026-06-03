@@ -9,8 +9,12 @@ from scripts.tools.audit_retrieval import (
     AuditSession,
     LazySettingsQueryTranslator,
     build_html_report,
+    free_query_id,
     interactive_loop,
+    load_query_catalog,
     load_channels,
+    parse_args,
+    resolve_catalog_query,
 )
 
 
@@ -64,10 +68,12 @@ def test_session_runs_matching_channel_and_writes_json_and_html(tmp_path: Path) 
 
     assert query_channel.calls == [("guitar tuner", 3)]
     assert user_channel.calls == []
-    assert json_path.name.endswith("_001_query.json")
-    assert html_path.name.endswith("_001_query.html")
+    assert json_path.name.endswith(f"_001_e5_{free_query_id('guitar tuner')}.json")
+    assert html_path.name.endswith(f"_001_e5_{free_query_id('guitar tuner')}.html")
     assert json.loads(json_path.read_text(encoding="utf-8")) == report
     assert "&lt;Guitar Tuner&gt;" in html_path.read_text(encoding="utf-8")
+    assert report["report_id"] == html_path.stem
+    assert report["query_id"] == free_query_id("guitar tuner")
 
 
 def test_user_report_includes_training_history(tmp_path: Path) -> None:
@@ -79,7 +85,9 @@ def test_user_report_includes_training_history(tmp_path: Path) -> None:
     assert report["user_history"]["popularity"] == [
         {"parent_asin": "SEEN", "user_id": "U1"}
     ]
-    assert "用户训练历史" in html_path.read_text(encoding="utf-8")
+    html = html_path.read_text(encoding="utf-8")
+    assert "用户训练历史" in html
+    assert "导出评分 CSV" not in html
 
 
 def test_interactive_loop_accepts_query_and_user_and_writes_each_report(
@@ -88,15 +96,15 @@ def test_interactive_loop_accepts_query_and_user_and_writes_each_report(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     session, query_channel, user_channel = build_session(tmp_path)
-    inputs = iter(["bad", "query guitar tuner", "user U1", ":quit"])
+    inputs = iter(["bad", "query-id EN-01", "query guitar tuner", "user U1", ":quit"])
     monkeypatch.setattr("builtins.input", lambda prompt: next(inputs))
 
-    interactive_loop(session)
+    interactive_loop(session, query_catalog={"EN-01": "catalog tuner"})
 
-    assert query_channel.calls == [("guitar tuner", 3)]
+    assert query_channel.calls == [("catalog tuner", 3), ("guitar tuner", 3)]
     assert user_channel.calls == [("U1", 3)]
-    assert len(list(tmp_path.rglob("*.json"))) == 2
-    assert len(list(tmp_path.rglob("*.html"))) == 2
+    assert len(list(tmp_path.rglob("*.json"))) == 3
+    assert len(list(tmp_path.rglob("*.html"))) == 3
     assert "Invalid command" in capsys.readouterr().out
 
 
@@ -142,10 +150,14 @@ def test_load_channels_rejects_future_placeholders_before_loading_data() -> None
 def test_build_html_report_renders_dense_document_in_folded_details() -> None:
     html = build_html_report(
         {
+            "generated_at": "2026-06-02T12:00:00",
+            "report_id": "report",
+            "query_id": "EN-01",
             "input_type": "query",
             "input": "guitar tuner",
             "scope": "dev",
             "top_k": 1,
+            "channels": ["e5"],
             "results": {
                 "e5": [
                     {
@@ -165,6 +177,86 @@ def test_build_html_report_renders_dense_document_in_folded_details() -> None:
 
     assert "完整元数据与检索信息" in html
     assert "Title: &lt;Tuner&gt;" in html
+    assert "查询 ID：</strong>EN-01" in html
+    assert "guitar tuner" in html
+    assert "模型：</strong>e5" in html
+    assert "导出评分 CSV" in html
+    assert "2 - 直接满足需求" in html
+    assert 'data-record-id="e5:1:P1"' in html
+    assert "cartwise-retrieval-audit:${reportId}" in html
+
+
+def test_html_report_shows_translated_query_when_it_differs_from_input() -> None:
+    html = build_html_report(
+        {
+            "generated_at": "2026-06-02T12:00:00",
+            "report_id": "report",
+            "query_id": "ZH-01",
+            "input_type": "query",
+            "input": "吉他调音器",
+            "scope": "dev",
+            "top_k": 1,
+            "channels": ["e5"],
+            "results": {
+                "e5": [
+                    {
+                        "channel": "e5",
+                        "rank": 1,
+                        "parent_asin": "P1",
+                        "score": 0.9,
+                        "score_type": "dense_score",
+                        "item": {"parent_asin": "P1", "title": "Tuner", "price": None},
+                        "retrieval_query": "guitar tuner",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert "实际检索文本：</strong>guitar tuner" in html
+
+
+def test_query_catalog_contains_expected_manual_evaluation_queries() -> None:
+    catalog = load_query_catalog()
+
+    assert len(catalog) == 30
+    assert catalog["EN-01"] == "guitar tuner for beginners"
+    assert catalog["ZH-05"] == "我想给刚开始学吉他的朋友买一个实用的小礼物"
+    assert resolve_catalog_query("en-01", catalog) == (
+        "EN-01",
+        "guitar tuner for beginners",
+    )
+
+
+def test_unknown_query_catalog_id_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown retrieval audit query ID"):
+        resolve_catalog_query("EN-99", {"EN-01": "guitar tuner"})
+
+
+def test_free_query_id_is_stable_and_filename_safe() -> None:
+    assert free_query_id(" guitar tuner ") == free_query_id("guitar tuner")
+    assert free_query_id("guitar tuner").startswith("FREE-")
+
+
+def test_default_output_filename_includes_all_query_channels(tmp_path: Path) -> None:
+    session = AuditSession(
+        {"e5": FakeChannel("query"), "blair": FakeChannel("query"), "bm25": FakeChannel("query")},
+        scope="dev",
+        top_k=3,
+        output_root=tmp_path,
+    )
+
+    _, json_path, _ = session.run("query", "guitar tuner", query_id="EN-01")
+
+    assert json_path.name.endswith("_001_e5_blair_bm25_EN-01.json")
+
+
+def test_parse_args_defaults_to_ten_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("sys.argv", ["audit_retrieval", "--channels", "e5"])
+
+    assert parse_args().top_k == 10
 
 
 def test_lazy_translator_creates_external_client_only_when_used(

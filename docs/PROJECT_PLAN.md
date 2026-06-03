@@ -100,14 +100,29 @@ flowchart TD
 
 ### 4.2 候选融合
 
-一期使用 weighted Reciprocal Rank Fusion 合并候选：
+带自然语言 query 的导购推荐以 Dense 和 BM25 为主要搜索召回通道。LightGCN 和
+Popularity 只提供个性化与热门度补充，不允许无条件绕过当前 query 相关性进入最终
+候选池。
+
+一期使用 weighted Reciprocal Rank Fusion 合并候选，默认权重为：
 
 | 用户类型 | 候选权重 |
 |---|---|
-| 已知用户 | LightGCN `0.45`、Dense `0.30`、BM25 `0.15`、Popularity `0.10` |
-| 冷启动用户 | Dense `0.50`、BM25 `0.30`、Popularity `0.20` |
+| 已知用户 | Dense `0.45`、BM25 `0.25`、LightGCN `0.25`、Popularity `0.05` |
+| 冷启动用户 | Dense `0.65`、BM25 `0.30`、Popularity `0.05` |
 
 这些权重属于一期默认值。实验完成后根据消融结果调整，并在报告中记录最终配置。
+
+类目相关性使用受控的宽泛商品类型标签，例如 `microphone_stand`、`guitar_strings`
+和 `tuner`。Dense 和 BM25 已根据原始 query 检索，不执行宽泛商品类型门控，避免
+因标签覆盖不完整或同义词归一化不足误删有效搜索结果。
+
+LightGCN 和 Popularity 与当前 query 无直接关系。只有当查询理解层能够高置信度解析
+宽泛商品类型时，才允许将通过类型门控的 LightGCN 和 Popularity 候选补充到带 query
+的候选池。如果无法高置信度解析类型，本轮只使用 Dense 和 BM25 候选。
+
+细粒度形态和使用场景，例如 `boom_arm`、`desk_mounted`、`broadcast` 和 `podcast`，
+保留给 Dense、BM25 和后续排序，不直接作为类目硬过滤条件。
 
 ### 4.3 硬过滤规则
 
@@ -116,6 +131,9 @@ flowchart TD
 - 排除品牌时，不允许返回对应品牌商品。
 - `换一批` 时，不允许返回本会话已展示商品。
 - 过滤后候选不足 5 个时，返回实际数量并提示用户放宽条件。
+- 价格、品牌、颜色和材料等用户明确约束对全部候选统一执行。
+- 宽泛商品类型门控仅限制 LightGCN 和 Popularity 补充候选，不对 Dense 和 BM25
+  搜索结果执行字符串匹配式类目过滤。
 
 ## 5. 图推荐方案
 
@@ -351,12 +369,16 @@ README.md
 .\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
-.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair bm25
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels blair
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels bm25
 ```
 
-统一召回审核工具支持连续输入 `query <文本>` 或 `user <用户 ID>`，在同一进程中复用
-已加载模型。每轮审核报告分别保存到
-`artifacts/reports/retrieval_audit/<scope>/` 下的 HTML 和 JSON 文件。
+统一召回审核工具支持连续输入 `query-id <ID>`、`query <文本>` 或 `user <用户 ID>`，
+在同一进程中复用已加载模型。人工测评查询清单保存在
+`artifacts/reports/manual_testing/retrieval_audit_queries.json`。每轮 query 审核报告分别保存到
+`artifacts/reports/retrieval_audit/<scope>/` 下的可评分 HTML 和 JSON 文件，并可从
+HTML 导出评分 CSV。
 
 原始数据、处理后数据、模型权重、向量索引和真实密钥不得提交 Git。
 

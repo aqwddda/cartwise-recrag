@@ -432,19 +432,33 @@ portable microphone stand for home recording
 - 两个模型的 Top K 结果可以由人工对比，选择一期默认 Dense 模型。
 - 阶段 6 不建立复杂评估集，不在当前阶段进行 Embedding 微调。
 
-使用统一召回审核工具连续输入 `query <文本>` 或 `user <用户 ID>`，并复用已经加载的
-模型：
+使用统一召回审核工具对 E5、BLaIR 和 BM25 分别执行人工测评。每个进程只加载一个
+查询通道，默认每次召回 Top 10，并复用已经加载的模型：
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
-.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels popularity lightgcn e5 blair bm25
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels blair
+.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels bm25
 ```
 
-每轮召回分别生成 HTML 和 JSON，默认保存到：
+交互模式优先输入 `query-id <ID>`，从
+`artifacts/reports/manual_testing/retrieval_audit_queries.json` 读取人工测评查询。仍可使用
+`query <文本>` 临时调试，或使用 `user <用户 ID>` 审核推荐通道：
 
 ```text
-artifacts/reports/retrieval_audit/<scope>/<timestamp>_<sequence>_<input-type>.html
-artifacts/reports/retrieval_audit/<scope>/<timestamp>_<sequence>_<input-type>.json
+query-id EN-01
+query-id ZH-03
+query guitar tuner for beginners
+```
+
+每轮 query 召回分别生成可评分 HTML 和机器可读 JSON。HTML 支持对每条结果填写
+`0`、`1`、`2` 三档相关度和可选备注，在浏览器本地自动保存进度，并导出评分 CSV。
+默认保存到：
+
+```text
+artifacts/reports/retrieval_audit/<scope>/<timestamp>_<sequence>_<channel>_<query-id>.html
+artifacts/reports/retrieval_audit/<scope>/<timestamp>_<sequence>_<channel>_<query-id>.json
 ```
 
 ### 提交
@@ -465,17 +479,48 @@ tests/test_fusion.py
 
 ### 功能
 
-使用 weighted Reciprocal Rank Fusion 合并候选：
+阶段 7 处理带自然语言 query 的导购推荐。Dense 和 BM25 是当前 query 的主要搜索召回
+通道；LightGCN 和 Popularity 提供个性化与热门度补充，但不能绕过 query 相关性门控
+直接进入最终候选池。
+
+使用 weighted Reciprocal Rank Fusion 合并候选，默认权重调整为：
 
 | 用户类型   | 候选权重                                                      |
 | ---------- | ------------------------------------------------------------- |
-| 已知用户   | LightGCN `0.45`、Dense `0.30`、BM25 `0.15`、Popularity `0.10` |
-| 冷启动用户 | Dense `0.50`、BM25 `0.30`、Popularity `0.20`                  |
+| 已知用户   | Dense `0.45`、BM25 `0.25`、LightGCN `0.25`、Popularity `0.05` |
+| 冷启动用户 | Dense `0.65`、BM25 `0.30`、Popularity `0.05`                  |
+
+类目相关性分为两个层次：
+
+```text
+宽泛商品类型：
+  microphone_stand、guitar_strings、tuner 等受控标签
+  -> 可用于 LightGCN 和 Popularity 补充候选的 query 相关性门控
+
+细粒度形态和使用场景：
+  boom_arm、desk_mounted、broadcast、podcast 等
+  -> 保留给 Dense、BM25 和后续排序，不直接作为类目硬过滤条件
+```
+
+Dense 和 BM25 已经根据原始 query 检索商品，不执行宽泛商品类型门控，避免由于商品标签
+覆盖不完整或同义词归一化不足误删有效搜索结果。例如 `microphone arm` 查询召回的
+`desk-mounted broadcast microphone boom stand` 应保留。
+
+LightGCN 和 Popularity 与当前 query 无直接关系。只有在能够高置信度解析出宽泛商品
+类型时，才允许使用通过该类型门控的 LightGCN 和 Popularity 候选补充搜索结果。如果
+无法高置信度解析宽泛商品类型，则本轮 query 只使用 Dense 和 BM25 候选，不添加
+LightGCN 或 Popularity 独有候选。
+
+价格、指定品牌、排除品牌、颜色和材料仍属于用户明确约束，在融合后对全部候选统一
+执行硬过滤。类目门控只控制 LightGCN 和 Popularity 补充候选是否与 query 的宽泛商品
+类型一致，不替代阶段 4 已有硬过滤器，也不对 Dense 和 BM25 结果做字符串匹配过滤。
 
 处理流程：
 
 ```text
-多路召回 -> 去重 -> 融合打分 -> 硬过滤 -> Top 5
+原始 query -> Dense + BM25 搜索召回
+宽泛商品类型 -> LightGCN + Popularity 补充候选门控
+-> 去重 -> weighted RRF -> 明确约束硬过滤 -> Top 5
 ```
 
 ### 验收
@@ -484,6 +529,9 @@ tests/test_fusion.py
 - 冷启动用户可以返回符合约束的 Top 5。
 - 同一商品不会重复出现。
 - 每个结果记录召回来源。
+- Dense 和 BM25 召回结果不会因为宽泛商品类型标签缺失而被门控删除。
+- LightGCN 和 Popularity 独有候选只有通过宽泛商品类型门控后才能进入带 query 的候选池。
+- 无法高置信度解析宽泛商品类型时，不向带 query 的候选池添加 LightGCN 或 Popularity 独有候选。
 
 ### 提交
 

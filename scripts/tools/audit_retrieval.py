@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,6 +25,7 @@ from cartwise.retrieval.dense import (
 from cartwise.retrieval.lightgcn import LightGCNRecommender
 from cartwise.retrieval.popularity import PopularityRecommender
 from scripts.paths import (
+    ARTIFACT_REPORTS_ROOT,
     MODELS_ROOT,
     PRODUCT_BM25_ARTIFACT_ROOT,
     PROCESSED_ROOTS,
@@ -32,12 +36,45 @@ from scripts.tools.item_metadata import load_items_by_parent_asin
 
 
 EXIT_COMMANDS = {":exit", ":quit", "exit", "quit"}
+QUERY_CATALOG_PATH = ARTIFACT_REPORTS_ROOT / "manual_testing" / "retrieval_audit_queries.json"
+QUERY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 QUERY_CHANNELS = ("e5", "blair", "bm25")
 USER_CHANNELS = ("popularity", "lightgcn")
 UNAVAILABLE_CHANNELS = {
     "fusion": "stage-seven fusion is not implemented yet",
 }
 CHANNELS = (*USER_CHANNELS, *QUERY_CHANNELS, *UNAVAILABLE_CHANNELS)
+
+
+def load_query_catalog(path: Path = QUERY_CATALOG_PATH) -> dict[str, str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError("retrieval audit query catalog must be a JSON object")
+    catalog: dict[str, str] = {}
+    for query_id, query in payload.items():
+        if not isinstance(query_id, str) or QUERY_ID_PATTERN.fullmatch(query_id) is None:
+            raise ValueError(f"invalid retrieval audit query ID: {query_id}")
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError(f"retrieval audit query must not be empty: {query_id}")
+        catalog[query_id.upper()] = query.strip()
+    return catalog
+
+
+def resolve_catalog_query(query_id: str, catalog: Mapping[str, str]) -> tuple[str, str]:
+    normalized = query_id.strip().upper()
+    if QUERY_ID_PATTERN.fullmatch(normalized) is None:
+        raise ValueError("query ID must use only letters, numbers, hyphens, and underscores")
+    try:
+        return normalized, catalog[normalized]
+    except KeyError as error:
+        raise ValueError(
+            f"unknown retrieval audit query ID: {normalized}; use 'query-id <ID>'"
+        ) from error
+
+
+def free_query_id(query: str) -> str:
+    digest = hashlib.sha256(query.strip().encode("utf-8")).hexdigest()[:10].upper()
+    return f"FREE-{digest}"
 
 
 class AuditChannel(Protocol):
@@ -261,7 +298,7 @@ def load_channels(
                 ),
                 items_by_parent_asin,
             )
-    return channels
+    return {name: channels[name] for name in channel_names}
 
 
 def _score_text(result: Mapping[str, Any]) -> str:
@@ -273,9 +310,139 @@ def _score_text(result: Mapping[str, Any]) -> str:
     return str(score)
 
 
+def _score_record_id(channel: str, result: Mapping[str, Any]) -> str:
+    return f"{channel}:{result['rank']}:{result['parent_asin']}"
+
+
+def _relevance_control(record_id: str, *, location: str) -> str:
+    control_id = f"relevance-{location}-{record_id}"
+    return f"""
+      <label class="score-label" for="{escape(control_id)}">相关度</label>
+      <select id="{escape(control_id)}" class="score-control" data-record-id="{escape(record_id)}" data-field="human_relevance">
+        <option value="">未评分</option>
+        <option value="2">2 - 直接满足需求</option>
+        <option value="1">1 - 部分相关或可接受替代</option>
+        <option value="0">0 - 无关或明显错误</option>
+      </select>
+    """
+
+
+def _notes_control(record_id: str, *, location: str) -> str:
+    control_id = f"notes-{location}-{record_id}"
+    return f"""
+      <label class="score-label" for="{escape(control_id)}">备注</label>
+      <input id="{escape(control_id)}" class="score-control score-notes" data-record-id="{escape(record_id)}" data-field="notes" placeholder="可选备注">
+    """
+
+
+def _script_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False).replace("</", "<\\/")
+
+
+def _build_scoring_script(report: Mapping[str, Any], score_rows: Sequence[Mapping[str, Any]]) -> str:
+    return f"""
+  const scoreRows = {_script_json(score_rows)};
+  const reportId = {_script_json(report["report_id"])};
+  const storageKey = `cartwise-retrieval-audit:${{reportId}}`;
+  const scoreControls = [...document.querySelectorAll(".score-control")];
+  let savedScores = {{}};
+
+  try {{
+    savedScores = JSON.parse(localStorage.getItem(storageKey) || "{{}}");
+  }} catch (error) {{
+    savedScores = {{}};
+  }}
+
+  function saveScores() {{
+    try {{
+      localStorage.setItem(storageKey, JSON.stringify(savedScores));
+    }} catch (error) {{
+      console.warn("Unable to persist retrieval audit scores", error);
+    }}
+  }}
+
+  function updateProgress() {{
+    const scored = scoreRows.filter(row => savedScores[row.record_id]?.human_relevance !== undefined && savedScores[row.record_id]?.human_relevance !== "").length;
+    document.getElementById("score-progress").textContent = `已评分 ${{scored}} / ${{scoreRows.length}}`;
+  }}
+
+  function synchronizeControls(recordId, field, value) {{
+    scoreControls
+      .filter(control => control.dataset.recordId === recordId && control.dataset.field === field)
+      .forEach(control => {{ control.value = value; }});
+  }}
+
+  scoreControls.forEach(control => {{
+    const record = savedScores[control.dataset.recordId] || {{}};
+    control.value = record[control.dataset.field] || "";
+    control.addEventListener("input", () => {{
+      const recordId = control.dataset.recordId;
+      const field = control.dataset.field;
+      savedScores[recordId] = savedScores[recordId] || {{}};
+      savedScores[recordId][field] = control.value;
+      synchronizeControls(recordId, field, control.value);
+      saveScores();
+      updateProgress();
+    }});
+  }});
+
+  function csvCell(value) {{
+    const text = value === null || value === undefined ? "" : String(value);
+    return `"${{text.replaceAll('"', '""')}}"`;
+  }}
+
+  document.getElementById("export-scores").addEventListener("click", () => {{
+    const headers = [
+      "report_id", "generated_at", "scope", "query_id", "input", "retrieval_query",
+      "channel", "rank", "parent_asin", "title", "brand", "price",
+      "retrieval_score", "score_type", "human_relevance", "notes"
+    ];
+    const csvRows = scoreRows.map(row => {{
+      const score = savedScores[row.record_id] || {{}};
+      const output = {{
+        report_id: reportId,
+        generated_at: {_script_json(report["generated_at"])},
+        scope: {_script_json(report["scope"])},
+        query_id: {_script_json(report["query_id"])},
+        input: {_script_json(report["input"])},
+        ...row,
+        human_relevance: score.human_relevance || "",
+        notes: score.notes || ""
+      }};
+      return headers.map(header => csvCell(output[header])).join(",");
+    }});
+    const csv = "\\ufeff" + [headers.map(csvCell).join(","), ...csvRows].join("\\r\\n") + "\\r\\n";
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([csv], {{ type: "text/csv;charset=utf-8" }}));
+    link.download = `${{reportId}}_scores.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }});
+
+  updateProgress();
+"""
+
+
+def _retrieval_query_html(report: Mapping[str, Any]) -> str:
+    retrieval_queries = {
+        result["retrieval_query"]
+        for results in report["results"].values()
+        for result in results
+        if result.get("retrieval_query") and result["retrieval_query"] != report["input"]
+    }
+    if not retrieval_queries:
+        return ""
+    return (
+        '<div class="translated-query"><strong>实际检索文本：</strong>'
+        f"{escape(' | '.join(sorted(retrieval_queries)))}</div>"
+    )
+
+
 def build_html_report(report: Mapping[str, Any]) -> str:
     rows: list[str] = []
     cards: list[str] = []
+    score_rows: list[dict[str, Any]] = []
+    scoring_enabled = report["input_type"] == "query"
     card_index = 0
     for channel, results in report["results"].items():
         for result in results:
@@ -283,6 +450,34 @@ def build_html_report(report: Mapping[str, Any]) -> str:
             item = result["item"]
             price = item.get("price")
             price_text = "missing" if price is None else f"${price:,.2f}"
+            record_id = _score_record_id(channel, result)
+            scoring_cells = ""
+            scoring_panel = ""
+            if scoring_enabled:
+                score_rows.append(
+                    {
+                        "record_id": record_id,
+                        "retrieval_query": result["retrieval_query"],
+                        "channel": channel,
+                        "rank": result["rank"],
+                        "parent_asin": result["parent_asin"],
+                        "title": item.get("title"),
+                        "brand": item.get("brand"),
+                        "price": price,
+                        "retrieval_score": result["score"],
+                        "score_type": result["score_type"],
+                    }
+                )
+                scoring_cells = (
+                    f"<td>{_relevance_control(record_id, location=f'table-{card_index}')}</td>"
+                    f"<td>{_notes_control(record_id, location=f'table-{card_index}')}</td>"
+                )
+                scoring_panel = (
+                    '<div class="score-panel">'
+                    f"{_relevance_control(record_id, location=f'card-{card_index}')}"
+                    f"{_notes_control(record_id, location=f'card-{card_index}')}"
+                    "</div>"
+                )
             rows.append(
                 f'<tr><td><a href="#item-{card_index}">{escape(result["rank"])}</a></td>'
                 f"<td>{escape(channel)}</td>"
@@ -290,7 +485,8 @@ def build_html_report(report: Mapping[str, Any]) -> str:
                 f"<td>{escape(result['parent_asin'])}</td>"
                 f"<td>{escape(item.get('title') or 'missing')}</td>"
                 f"<td>{escape(item.get('brand') or 'missing')}</td>"
-                f"<td>{escape(price_text)}</td></tr>"
+                f"<td>{escape(price_text)}</td>"
+                f"{scoring_cells}</tr>"
             )
             details = {
                 "score_type": result["score_type"],
@@ -307,6 +503,7 @@ def build_html_report(report: Mapping[str, Any]) -> str:
         <a href="#top">back to top</a>
       </header>
       <h2>{escape(item.get("title") or "missing title")}</h2>
+      {scoring_panel}
       <details><summary>完整元数据与检索信息</summary>{render_value(details)}</details>
     </article>
                 """
@@ -318,6 +515,28 @@ def build_html_report(report: Mapping[str, Any]) -> str:
             "<details><summary>用户训练历史</summary>"
             f"{render_value(history)}</details>"
         )
+    query_banner_html = ""
+    scoring_toolbar_html = ""
+    scoring_script = ""
+    scoring_headers = ""
+    if scoring_enabled:
+        channel_text = "_".join(report["channels"])
+        query_banner_html = f"""
+  <section class="query-banner">
+    <div><strong>查询 ID：</strong>{escape(report["query_id"])}</div>
+    <div class="query-text">{escape(report["input"])}</div>
+    <div><strong>模型：</strong>{escape(channel_text)}</div>
+    {_retrieval_query_html(report)}
+  </section>
+"""
+        scoring_toolbar_html = """
+  <div class="score-toolbar">
+    <strong id="score-progress">已评分 0 / 0</strong>
+    <button id="export-scores" type="button">导出评分 CSV</button>
+  </div>
+"""
+        scoring_script = _build_scoring_script(report, score_rows)
+        scoring_headers = "<th>相关度</th><th>备注</th>"
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -330,17 +549,20 @@ def build_html_report(report: Mapping[str, Any]) -> str:
 <main id="top">
   <h1>CartWise 召回审核报告</h1>
   <div class="subtitle">输入类型：{escape(report["input_type"])} · 输入：{escape(report["input"])} · scope：{escape(report["scope"])} · Top K：{escape(report["top_k"])}</div>
+  {query_banner_html}
   {history_html}
+  {scoring_toolbar_html}
   <div class="toolbar"><input id="search" placeholder="搜索通道、ASIN、标题、品牌或任意属性值"></div>
   <div class="table-wrap">
     <table class="overview">
-      <thead><tr><th>rank</th><th>channel</th><th>score</th><th>parent_asin</th><th>title</th><th>brand</th><th>price</th></tr></thead>
+      <thead><tr><th>rank</th><th>channel</th><th>score</th><th>parent_asin</th><th>title</th><th>brand</th><th>price</th>{scoring_headers}</tr></thead>
       <tbody>{"".join(rows)}</tbody>
     </table>
   </div>
   <section id="cards">{"".join(cards)}</section>
 </main>
 <script>{SEARCH_SCRIPT}</script>
+<script>{scoring_script}</script>
 </body>
 </html>
 """
@@ -365,7 +587,13 @@ class AuditSession:
         self.output_prefix = output_prefix
         self.sequence = 0
 
-    def _output_stem(self, input_type: str) -> Path:
+    def _output_stem(
+        self,
+        input_type: str,
+        *,
+        channel_names: Sequence[str],
+        query_id: str | None,
+    ) -> Path:
         self.sequence += 1
         if self.output_prefix is not None:
             if self.sequence == 1:
@@ -374,14 +602,36 @@ class AuditSession:
                 f"{self.output_prefix.name}_{self.sequence:03d}_{input_type}"
             )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return self.output_root / self.scope / f"{timestamp}_{self.sequence:03d}_{input_type}"
+        channels = "_".join(channel_names)
+        identifier = query_id if input_type == "query" else input_type
+        return (
+            self.output_root
+            / self.scope
+            / f"{timestamp}_{self.sequence:03d}_{channels}_{identifier}"
+        )
 
-    def run(self, input_type: str, value: str) -> tuple[dict[str, Any], Path, Path]:
+    def run(
+        self,
+        input_type: str,
+        value: str,
+        *,
+        query_id: str | None = None,
+    ) -> tuple[dict[str, Any], Path, Path]:
         normalized = value.strip()
         if input_type not in {"query", "user"}:
             raise ValueError(f"unsupported input type: {input_type}")
         if not normalized:
             raise ValueError(f"{input_type} must not be empty")
+        if input_type == "query":
+            normalized_query_id = query_id.strip().upper() if query_id else free_query_id(normalized)
+            if QUERY_ID_PATTERN.fullmatch(normalized_query_id) is None:
+                raise ValueError(
+                    "query ID must use only letters, numbers, hyphens, and underscores"
+                )
+        else:
+            if query_id is not None:
+                raise ValueError("query ID can only be used with query input")
+            normalized_query_id = None
         selected = {
             name: channel
             for name, channel in self.channels.items()
@@ -395,6 +645,7 @@ class AuditSession:
             "top_k": self.top_k,
             "input_type": input_type,
             "input": normalized,
+            "query_id": normalized_query_id,
             "channels": list(selected),
             "results": {
                 name: channel.recall(normalized, k=self.top_k)
@@ -405,7 +656,12 @@ class AuditSession:
             report["user_history"] = {
                 name: channel.history(normalized) for name, channel in selected.items()
             }
-        stem = self._output_stem(input_type)
+        stem = self._output_stem(
+            input_type,
+            channel_names=list(selected),
+            query_id=normalized_query_id,
+        )
+        report["report_id"] = stem.name
         json_path = stem.with_suffix(".json")
         html_path = stem.with_suffix(".html")
         json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,8 +678,13 @@ def print_report_paths(json_path: Path, html_path: Path) -> None:
     print(f"Wrote HTML: {html_path}")
 
 
-def interactive_loop(session: AuditSession) -> None:
-    print("Channels are ready. Enter 'query <text>', 'user <id>', or :quit.")
+def interactive_loop(
+    session: AuditSession,
+    *,
+    query_catalog: Mapping[str, str] | None = None,
+) -> None:
+    print("Channels are ready. Enter 'query-id <ID>', 'query <text>', 'user <id>', or :quit.")
+    catalog = query_catalog or load_query_catalog()
     while True:
         try:
             command = input("\naudit> ").strip()
@@ -435,11 +696,15 @@ def interactive_loop(session: AuditSession) -> None:
         if not command:
             continue
         input_type, separator, value = command.partition(" ")
-        if input_type not in {"query", "user"} or not separator or not value.strip():
-            print("Invalid command. Use 'query <text>', 'user <id>', or :quit.")
+        if input_type not in {"query-id", "query", "user"} or not separator or not value.strip():
+            print("Invalid command. Use 'query-id <ID>', 'query <text>', 'user <id>', or :quit.")
             continue
         try:
-            _, json_path, html_path = session.run(input_type, value)
+            if input_type == "query-id":
+                query_id, query = resolve_catalog_query(value, catalog)
+                _, json_path, html_path = session.run("query", query, query_id=query_id)
+            else:
+                _, json_path, html_path = session.run(input_type, value)
         except (QueryTranslationError, ValueError) as error:
             print(f"Audit error: {error}")
             continue
@@ -450,9 +715,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scope", choices=PROCESSED_ROOTS, default="full")
     parser.add_argument("--channels", nargs="+", choices=CHANNELS, required=True)
-    parser.add_argument("--query")
+    query_group = parser.add_mutually_exclusive_group()
+    query_group.add_argument("--query")
+    query_group.add_argument("--query-id")
     parser.add_argument("--user-id")
-    parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--qdrant-url")
     parser.add_argument("--output-prefix", type=Path)
@@ -476,9 +743,13 @@ def main() -> None:
             output_root=RETRIEVAL_AUDIT_ARTIFACT_ROOT,
             output_prefix=args.output_prefix,
         )
-        if args.query is None and args.user_id is None:
+        if args.query is None and args.query_id is None and args.user_id is None:
             interactive_loop(session)
             return
+        if args.query_id is not None:
+            query_id, query = resolve_catalog_query(args.query_id, load_query_catalog())
+            _, json_path, html_path = session.run("query", query, query_id=query_id)
+            print_report_paths(json_path, html_path)
         if args.query is not None:
             _, json_path, html_path = session.run("query", args.query)
             print_report_paths(json_path, html_path)

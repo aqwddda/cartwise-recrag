@@ -2,8 +2,14 @@
 .env
 __pycache__/
 .pytest_cache/
+.playwright-cli/
 data/
 models/
-artifacts/
+artifacts/*
+!artifacts/reports/
+artifacts/reports/*
+!artifacts/reports/manual_testing/
+artifacts/reports/manual_testing/*
+!artifacts/reports/manual_testing/retrieval_audit_queries.json
 reports/**/*.part
 AGENTS.md
