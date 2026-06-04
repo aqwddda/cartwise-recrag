@@ -46,6 +46,69 @@ class FakeChannel:
         return [{"parent_asin": "SEEN", "user_id": value}]
 
 
+class FakeFusionChannel(FakeChannel):
+    accepts_user_context = True
+
+    def __init__(self) -> None:
+        super().__init__("query")
+        self.user_calls: list[tuple[str, int, str | None]] = []
+        self.sidecar_written = False
+
+    def recall(self, value: str, *, k: int, user_id: str | None = None):
+        self.user_calls.append((value, k, user_id))
+        return [
+            {
+                "channel": "fusion",
+                "rank": 1,
+                "parent_asin": "P1",
+                "score": 0.02,
+                "score_type": "weighted_rrf",
+                "fusion_score": 0.02,
+                "sources": ["dense", "bm25"],
+                "source_ranks": {"dense": 1, "bm25": 2},
+                "source_scores": {"dense": 0.9, "bm25": 12.0},
+                "item": {
+                    "parent_asin": "P1",
+                    "title": "Fusion Tuner",
+                    "brand": "Example",
+                    "price": 19.99,
+                },
+                "retrieval_query": value,
+            }
+        ]
+
+    def write_sidecar_reports(self, stem: Path):
+        self.sidecar_written = True
+        ranked = stem.with_name(f"{stem.name}_fusion_ranked.json")
+        filtered = stem.with_name(f"{stem.name}_filtered.json")
+        payload = {
+            "fusion_intent": self.audit_metadata()["fusion_intent"],
+            "filter_constraints": self.audit_metadata()["filter_constraints"],
+            "results": [],
+        }
+        ranked.write_text(json.dumps(payload), encoding="utf-8")
+        filtered.write_text(json.dumps(payload), encoding="utf-8")
+        return {"fusion_ranked_json": ranked, "filtered_json": filtered}
+
+    def audit_metadata(self):
+        return {
+            "fusion_intent": {
+                "search_query": "guitar tuner",
+                "product_terms": ["guitar tuner"],
+                "raw_filters": {"max_price": 50.0},
+            },
+            "filter_constraints": {
+                "category_tags": ["Accessories"],
+                "min_price": None,
+                "max_price": 50.0,
+                "brands": [],
+                "excluded_brands": ["Fender"],
+                "color_tags": [],
+                "material_tags": [],
+            },
+        }
+
+
 def build_session(tmp_path: Path) -> tuple[AuditSession, FakeChannel, FakeChannel]:
     query_channel = FakeChannel("query")
     user_channel = FakeChannel("user")
@@ -108,6 +171,27 @@ def test_interactive_loop_accepts_query_and_user_and_writes_each_report(
     assert "Invalid command" in capsys.readouterr().out
 
 
+def test_interactive_loop_accepts_user_query_for_fusion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    channel = FakeFusionChannel()
+    session = AuditSession(
+        {"fusion": channel},
+        scope="dev",
+        top_k=3,
+        output_root=tmp_path,
+    )
+    inputs = iter(["user-query U1 guitar tuner under 50", ":quit"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(inputs))
+
+    interactive_loop(session, query_catalog={})
+
+    assert channel.user_calls == [("guitar tuner under 50", 3, "U1")]
+    assert len(list(tmp_path.rglob("*.json"))) == 3
+    assert len(list(tmp_path.rglob("*.html"))) == 1
+
+
 def test_session_rejects_input_without_matching_channel(tmp_path: Path) -> None:
     session = AuditSession(
         {"e5": FakeChannel("query")},
@@ -137,14 +221,42 @@ def test_custom_output_prefix_is_reused_for_later_reports(tmp_path: Path) -> Non
     assert second_json == tmp_path / "custom" / "audit_002_query.json"
 
 
-def test_load_channels_rejects_future_placeholders_before_loading_data() -> None:
-    with pytest.raises(ValueError, match="fusion: stage-seven fusion is not implemented yet"):
-        load_channels(
-            scope="dev",
-            channel_names=["fusion"],
-            qdrant_url="http://127.0.0.1:6333",
-            device="cpu",
+def test_session_passes_user_context_to_fusion_and_writes_sidecars(tmp_path: Path) -> None:
+    channel = FakeFusionChannel()
+    session = AuditSession(
+        {"fusion": channel},
+        scope="dev",
+        top_k=3,
+        output_root=tmp_path,
+    )
+
+    report, json_path, html_path = session.run("query", "guitar tuner", user_id="U1")
+
+    assert channel.user_calls == [("guitar tuner", 3, "U1")]
+    assert channel.sidecar_written
+    assert report["user_id"] == "U1"
+    assert report["fusion_intent"]["product_terms"] == ["guitar tuner"]
+    assert report["filter_constraints"]["category_tags"] == ["Accessories"]
+    assert "fusion_fusion_ranked_json" in report["sidecar_reports"]
+    assert "fusion_filtered_json" in report["sidecar_reports"]
+    ranked_payload = json.loads(
+        Path(report["sidecar_reports"]["fusion_fusion_ranked_json"]).read_text(
+            encoding="utf-8"
         )
+    )
+    filtered_payload = json.loads(
+        Path(report["sidecar_reports"]["fusion_filtered_json"]).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert ranked_payload["filter_constraints"]["excluded_brands"] == ["Fender"]
+    assert filtered_payload["fusion_intent"]["search_query"] == "guitar tuner"
+    assert json.loads(json_path.read_text(encoding="utf-8")) == report
+    html = html_path.read_text(encoding="utf-8")
+    assert "Fusion Tuner" in html
+    assert "source_ranks" in html
+    assert "Fusion 意图与过滤约束" in html
+    assert "filter_constraints" in html
 
 
 def test_build_html_report_renders_dense_document_in_folded_details() -> None:
@@ -256,7 +368,14 @@ def test_parse_args_defaults_to_ten_results(
 ) -> None:
     monkeypatch.setattr("sys.argv", ["audit_retrieval", "--channels", "e5"])
 
-    assert parse_args().top_k == 10
+    args = parse_args()
+
+    assert args.top_k == 10
+    assert args.dense_k == 30
+    assert args.bm25_k == 30
+    assert args.lightgcn_k == 30
+    assert args.popularity_k == 30
+    assert args.rrf_k == 60
 
 
 def test_lazy_translator_creates_external_client_only_when_used(

@@ -52,6 +52,8 @@ Rules:
 - If a list field is uncertain, use [].
 - If a price field is uncertain, use null.
 - If a list field contains Chinese text, translate it into English.
+- product_terms should contain canonical product types, not descriptive modifiers.
+- Remove size, quality, portability, skill-level, or subjective descriptors unless they fundamentally change the product category.
 
 User query:
 {query}"""

@@ -8,12 +8,18 @@ import json
 import re
 from collections.abc import Mapping
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from cartwise.core.config import Settings
-from cartwise.core.llm import QueryTranslationError, create_query_translator
+from cartwise.core.llm import (
+    QueryIntentError,
+    QueryTranslationError,
+    create_query_intent_parser,
+    create_query_translator,
+)
 from cartwise.retrieval.bm25 import BM25Index, BM25Retriever
 from cartwise.retrieval.dense import (
     DENSE_MODEL_SPECS,
@@ -21,6 +27,16 @@ from cartwise.retrieval.dense import (
     collection_name,
     create_qdrant_client,
     load_dense_encoder,
+)
+from cartwise.retrieval.filters import resolve_filter_constraints
+from cartwise.retrieval.filters import FilterConstraints
+from cartwise.retrieval.fusion import (
+    BM25_CHANNEL,
+    DENSE_CHANNEL,
+    FusionConfig,
+    LIGHTGCN_CHANNEL,
+    POPULARITY_CHANNEL,
+    fuse_candidates,
 )
 from cartwise.retrieval.lightgcn import LightGCNRecommender
 from cartwise.retrieval.popularity import PopularityRecommender
@@ -40,10 +56,8 @@ QUERY_CATALOG_PATH = ARTIFACT_REPORTS_ROOT / "manual_testing" / "retrieval_audit
 QUERY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 QUERY_CHANNELS = ("e5", "blair", "bm25")
 USER_CHANNELS = ("popularity", "lightgcn")
-UNAVAILABLE_CHANNELS = {
-    "fusion": "stage-seven fusion is not implemented yet",
-}
-CHANNELS = (*USER_CHANNELS, *QUERY_CHANNELS, *UNAVAILABLE_CHANNELS)
+FUSION_CHANNELS = ("fusion",)
+CHANNELS = (*USER_CHANNELS, *QUERY_CHANNELS, *FUSION_CHANNELS)
 
 
 def load_query_catalog(path: Path = QUERY_CATALOG_PATH) -> dict[str, str]:
@@ -97,8 +111,36 @@ class LazySettingsQueryTranslator:
         return self._translator.translate(query)
 
 
+class LazySettingsQueryIntentParser:
+    """Delay external LLM client creation until the first fusion query."""
+
+    def __init__(self, translator: LazySettingsQueryTranslator) -> None:
+        self.translator = translator
+        self._parser = None
+
+    def parse(self, query: str):
+        if self._parser is None:
+            self._parser = create_query_intent_parser(
+                Settings(),
+                translator=self.translator,
+            )
+        return self._parser.parse(query)
+
+
 def _item(items_by_parent_asin: Mapping[str, dict[str, Any]], parent_asin: str) -> dict[str, Any]:
     return dict(items_by_parent_asin.get(parent_asin, {"parent_asin": parent_asin}))
+
+
+def _filter_constraints_payload(constraints: FilterConstraints) -> dict[str, Any]:
+    return {
+        "category_tags": list(constraints.category_tags),
+        "min_price": constraints.min_price,
+        "max_price": constraints.max_price,
+        "brands": list(constraints.brands),
+        "excluded_brands": list(constraints.excluded_brands),
+        "color_tags": list(constraints.color_tags),
+        "material_tags": list(constraints.material_tags),
+    }
 
 
 class PopularityAuditChannel:
@@ -239,65 +281,279 @@ class BM25AuditChannel:
         return []
 
 
+class FusionAuditChannel:
+    input_type = "query"
+    accepts_user_context = True
+
+    def __init__(
+        self,
+        *,
+        dense_retriever: DenseRetriever,
+        bm25_retriever: BM25Retriever,
+        lightgcn_recommender: LightGCNRecommender,
+        popularity_recommender: PopularityRecommender,
+        items_by_parent_asin: Mapping[str, dict[str, Any]],
+        intent_parser: LazySettingsQueryIntentParser,
+        config: FusionConfig,
+    ) -> None:
+        self.dense_retriever = dense_retriever
+        self.bm25_retriever = bm25_retriever
+        self.lightgcn_recommender = lightgcn_recommender
+        self.popularity_recommender = popularity_recommender
+        self.items_by_parent_asin = items_by_parent_asin
+        self.intent_parser = intent_parser
+        self.config = config
+        self._last_ranked_results: list[dict[str, Any]] = []
+        self._last_filtered_results: list[dict[str, Any]] = []
+        self._last_fusion_intent: dict[str, Any] = {}
+        self._last_filter_constraints: dict[str, Any] = {}
+
+    def recall(
+        self,
+        value: str,
+        *,
+        k: int,
+        user_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        config = replace(self.config, final_top_k=k)
+        intent = self.intent_parser.parse(value)
+        constraints = resolve_filter_constraints(
+            product_terms=intent.product_terms,
+            brands=intent.filters.brands,
+            excluded_brands=intent.filters.excluded_brands,
+            min_price=intent.filters.min_price,
+            max_price=intent.filters.max_price,
+            color_tags=intent.filters.color_tags,
+            material_tags=intent.filters.material_tags,
+        )
+        self._last_fusion_intent = {
+            "search_query": intent.search_query,
+            "product_terms": list(intent.product_terms),
+            "raw_filters": _filter_constraints_payload(intent.filters),
+        }
+        self._last_filter_constraints = _filter_constraints_payload(constraints)
+        normalized_user_id = user_id.strip() if user_id else ""
+        known_user = bool(
+            normalized_user_id
+            and normalized_user_id in self.lightgcn_recommender.user_to_index
+        )
+        personalization_user_id = normalized_user_id or "__cold_start__"
+        candidates_by_channel = {
+            DENSE_CHANNEL: self._dense_candidates(intent.search_query, config.dense_k),
+            BM25_CHANNEL: self._bm25_candidates(intent.search_query, config.bm25_k),
+            LIGHTGCN_CHANNEL: (
+                self._lightgcn_candidates(normalized_user_id, config.lightgcn_k)
+                if known_user
+                else []
+            ),
+            POPULARITY_CHANNEL: self._popularity_candidates(
+                personalization_user_id,
+                config.popularity_k,
+            ),
+        }
+        output = fuse_candidates(
+            candidates_by_channel,
+            constraints,
+            config=config,
+            known_user=known_user,
+        )
+        self._last_ranked_results = output.ranked_results
+        self._last_filtered_results = output.filtered_results
+        return output.final_results
+
+    def history(self, value: str) -> list[dict[str, Any]]:
+        del value
+        return []
+
+    def write_sidecar_reports(self, stem: Path) -> dict[str, Path]:
+        ranked_path = stem.with_name(f"{stem.name}_fusion_ranked.json")
+        filtered_path = stem.with_name(f"{stem.name}_filtered.json")
+        ranked_path.write_text(
+            json.dumps(
+                {
+                    "report_id": stem.name,
+                    "channel": "fusion",
+                    "fusion_intent": self._last_fusion_intent,
+                    "filter_constraints": self._last_filter_constraints,
+                    "results": self._last_ranked_results,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        filtered_path.write_text(
+            json.dumps(
+                {
+                    "report_id": stem.name,
+                    "channel": "fusion",
+                    "fusion_intent": self._last_fusion_intent,
+                    "filter_constraints": self._last_filter_constraints,
+                    "results": self._last_filtered_results,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "fusion_ranked_json": ranked_path,
+            "filtered_json": filtered_path,
+        }
+
+    def _dense_candidates(self, query: str, k: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "channel": DENSE_CHANNEL,
+                "rank": rank,
+                "parent_asin": result["parent_asin"],
+                "score": result["dense_score"],
+                "score_type": "dense_score",
+                "item": _item(self.items_by_parent_asin, result["parent_asin"]),
+                "retrieval_query": result["retrieval_query"],
+                "document": result.get("document"),
+            }
+            for rank, result in enumerate(self.dense_retriever.search(query, k=k), start=1)
+        ]
+
+    def audit_metadata(self) -> dict[str, Any]:
+        return {
+            "fusion_intent": self._last_fusion_intent,
+            "filter_constraints": self._last_filter_constraints,
+        }
+
+    def _bm25_candidates(self, query: str, k: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "channel": BM25_CHANNEL,
+                "rank": rank,
+                "parent_asin": result["parent_asin"],
+                "score": result["bm25_score"],
+                "score_type": "bm25_score",
+                "item": _item(self.items_by_parent_asin, result["parent_asin"]),
+                "retrieval_query": result["retrieval_query"],
+                "document": result["document"],
+            }
+            for rank, result in enumerate(self.bm25_retriever.search(query, k=k), start=1)
+        ]
+
+    def _lightgcn_candidates(self, user_id: str, k: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "channel": LIGHTGCN_CHANNEL,
+                "rank": rank,
+                "parent_asin": parent_asin,
+                "score": None,
+                "score_type": None,
+                "item": _item(self.items_by_parent_asin, parent_asin),
+                "retrieval_query": None,
+            }
+            for rank, parent_asin in enumerate(
+                self.lightgcn_recommender.recommend(user_id, k=k),
+                start=1,
+            )
+        ]
+
+    def _popularity_candidates(self, user_id: str, k: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "channel": POPULARITY_CHANNEL,
+                "rank": rank,
+                "parent_asin": parent_asin,
+                "score": self.popularity_recommender.item_counts[parent_asin],
+                "score_type": "interaction_count",
+                "item": _item(self.items_by_parent_asin, parent_asin),
+                "retrieval_query": None,
+            }
+            for rank, parent_asin in enumerate(
+                self.popularity_recommender.recommend(user_id, k=k),
+                start=1,
+            )
+        ]
+
+
 def load_channels(
     *,
     scope: str,
     channel_names: list[str],
     qdrant_url: str,
     device: str,
+    fusion_config: FusionConfig = FusionConfig(),
 ) -> dict[str, AuditChannel]:
-    unavailable = [name for name in channel_names if name in UNAVAILABLE_CHANNELS]
-    if unavailable:
-        messages = ", ".join(f"{name}: {UNAVAILABLE_CHANNELS[name]}" for name in unavailable)
-        raise ValueError(f"unavailable retrieval channel(s): {messages}")
-
     processed_root = PROCESSED_ROOTS[scope]
     items_by_parent_asin = load_items_by_parent_asin(processed_root / "items.parquet")
     channels: dict[str, AuditChannel] = {}
     training_path = processed_root / "interactions_train.parquet"
+    needs_fusion = "fusion" in channel_names
+    popularity_recommender = None
+    if "popularity" in channel_names or needs_fusion:
+        popularity_recommender = PopularityRecommender.from_parquet(training_path)
     if "popularity" in channel_names:
         channels["popularity"] = PopularityAuditChannel(
-            PopularityRecommender.from_parquet(training_path),
+            popularity_recommender,
             items_by_parent_asin,
+        )
+    lightgcn_recommender = None
+    if "lightgcn" in channel_names or needs_fusion:
+        lightgcn_recommender = LightGCNRecommender.load(
+            MODELS_ROOT / "lightgcn" / scope / "lightgcn.pt",
+            device=device,
         )
     if "lightgcn" in channel_names:
         channels["lightgcn"] = LightGCNAuditChannel(
-            LightGCNRecommender.load(
-                MODELS_ROOT / "lightgcn" / scope / "lightgcn.pt",
-                device=device,
-            ),
+            lightgcn_recommender,
             items_by_parent_asin,
         )
 
     translator = LazySettingsQueryTranslator()
-    if "bm25" in channel_names:
+    bm25_retriever = None
+    if "bm25" in channel_names or needs_fusion:
         index_path = PRODUCT_BM25_ARTIFACT_ROOT / scope / "bm25.json.gz"
         print(f"Loading bm25: {index_path}")
-        channels["bm25"] = BM25AuditChannel(
-            BM25Retriever(BM25Index.load(index_path), translator=translator),
-            items_by_parent_asin,
-        )
+        bm25_retriever = BM25Retriever(BM25Index.load(index_path), translator=translator)
+    if "bm25" in channel_names:
+        channels["bm25"] = BM25AuditChannel(bm25_retriever, items_by_parent_asin)
 
     dense_names = [name for name in channel_names if name in DENSE_MODEL_SPECS]
-    if dense_names:
+    dense_names_to_load = list(dense_names)
+    if needs_fusion and "e5" not in dense_names_to_load:
+        dense_names_to_load.append("e5")
+    dense_retrievers: dict[str, DenseRetriever] = {}
+    if dense_names_to_load:
         client = create_qdrant_client(qdrant_url)
-        for model_key in dense_names:
+        for model_key in dense_names_to_load:
             collection = collection_name(scope, model_key)
             info = client.get_collection(collection)
             print(
                 f"Loading {model_key}: {DENSE_MODEL_SPECS[model_key].model_name} "
                 f"({info.points_count:,} indexed products)"
             )
-            channels[model_key] = DenseAuditChannel(
-                model_key,
-                DenseRetriever(
-                    client,
-                    collection=collection,
-                    encoder=load_dense_encoder(model_key, device=device),
-                    translator=translator,
-                ),
-                items_by_parent_asin,
+            dense_retrievers[model_key] = DenseRetriever(
+                client,
+                collection=collection,
+                encoder=load_dense_encoder(model_key, device=device),
+                translator=translator,
             )
+            if model_key in dense_names:
+                channels[model_key] = DenseAuditChannel(
+                    model_key,
+                    dense_retrievers[model_key],
+                    items_by_parent_asin,
+                )
+    if needs_fusion:
+        channels["fusion"] = FusionAuditChannel(
+            dense_retriever=dense_retrievers["e5"],
+            bm25_retriever=bm25_retriever,
+            lightgcn_recommender=lightgcn_recommender,
+            popularity_recommender=popularity_recommender,
+            items_by_parent_asin=items_by_parent_asin,
+            intent_parser=LazySettingsQueryIntentParser(translator),
+            config=fusion_config,
+        )
     return {name: channels[name] for name in channel_names}
 
 
@@ -438,6 +694,20 @@ def _retrieval_query_html(report: Mapping[str, Any]) -> str:
     )
 
 
+def _fusion_metadata_html(report: Mapping[str, Any]) -> str:
+    metadata = {
+        key: report[key]
+        for key in ("fusion_intent", "filter_constraints")
+        if key in report
+    }
+    if not metadata:
+        return ""
+    return (
+        "<details><summary>Fusion 意图与过滤约束</summary>"
+        f"{render_value(metadata)}</details>"
+    )
+
+
 def build_html_report(report: Mapping[str, Any]) -> str:
     rows: list[str] = []
     cards: list[str] = []
@@ -493,8 +763,19 @@ def build_html_report(report: Mapping[str, Any]) -> str:
                 "retrieval_query": result["retrieval_query"],
                 "item": item,
             }
-            if "document" in result:
-                details["document"] = result["document"]
+            for key in (
+                "document",
+                "sources",
+                "source_ranks",
+                "source_scores",
+                "source_score_types",
+                "source_weights",
+                "rrf_contributions",
+                "retrieval_queries",
+                "documents",
+            ):
+                if key in result:
+                    details[key] = result[key]
             cards.append(
                 f"""
     <article class="item-card" id="item-{card_index}" data-search="{escape(json.dumps(result, ensure_ascii=False).casefold())}">
@@ -550,6 +831,7 @@ def build_html_report(report: Mapping[str, Any]) -> str:
   <h1>CartWise 召回审核报告</h1>
   <div class="subtitle">输入类型：{escape(report["input_type"])} · 输入：{escape(report["input"])} · scope：{escape(report["scope"])} · Top K：{escape(report["top_k"])}</div>
   {query_banner_html}
+  {_fusion_metadata_html(report)}
   {history_html}
   {scoring_toolbar_html}
   <div class="toolbar"><input id="search" placeholder="搜索通道、ASIN、标题、品牌或任意属性值"></div>
@@ -616,6 +898,7 @@ class AuditSession:
         value: str,
         *,
         query_id: str | None = None,
+        user_id: str | None = None,
     ) -> tuple[dict[str, Any], Path, Path]:
         normalized = value.strip()
         if input_type not in {"query", "user"}:
@@ -631,7 +914,12 @@ class AuditSession:
         else:
             if query_id is not None:
                 raise ValueError("query ID can only be used with query input")
+            if user_id is not None:
+                raise ValueError("user context can only be used with query input")
             normalized_query_id = None
+        normalized_user_id = user_id.strip() if user_id else None
+        if normalized_user_id == "":
+            raise ValueError("user ID must not be empty")
         selected = {
             name: channel
             for name, channel in self.channels.items()
@@ -648,10 +936,19 @@ class AuditSession:
             "query_id": normalized_query_id,
             "channels": list(selected),
             "results": {
-                name: channel.recall(normalized, k=self.top_k)
+                name: self._recall_channel(
+                    channel,
+                    normalized,
+                    user_id=normalized_user_id,
+                )
                 for name, channel in selected.items()
             },
         }
+        if normalized_user_id is not None:
+            report["user_id"] = normalized_user_id
+        audit_metadata = self._audit_metadata(selected)
+        if audit_metadata:
+            report.update(audit_metadata)
         if input_type == "user":
             report["user_history"] = {
                 name: channel.history(normalized) for name, channel in selected.items()
@@ -662,15 +959,47 @@ class AuditSession:
             query_id=normalized_query_id,
         )
         report["report_id"] = stem.name
+        stem.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_paths: dict[str, str] = {}
+        for name, channel in selected.items():
+            writer = getattr(channel, "write_sidecar_reports", None)
+            if writer is None:
+                continue
+            for artifact_name, path in writer(stem).items():
+                sidecar_paths[f"{name}_{artifact_name}"] = str(path)
+        if sidecar_paths:
+            report["sidecar_reports"] = sidecar_paths
         json_path = stem.with_suffix(".json")
         html_path = stem.with_suffix(".html")
-        json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         html_path.write_text(build_html_report(report), encoding="utf-8")
         return report, json_path, html_path
+
+    def _recall_channel(
+        self,
+        channel: AuditChannel,
+        value: str,
+        *,
+        user_id: str | None,
+    ) -> list[dict[str, Any]]:
+        if user_id is not None and getattr(channel, "accepts_user_context", False):
+            return channel.recall(value, k=self.top_k, user_id=user_id)
+        return channel.recall(value, k=self.top_k)
+
+    def _audit_metadata(
+        self,
+        selected: Mapping[str, AuditChannel],
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for channel in selected.values():
+            reader = getattr(channel, "audit_metadata", None)
+            if reader is None:
+                continue
+            metadata.update(reader())
+        return metadata
 
 
 def print_report_paths(json_path: Path, html_path: Path) -> None:
@@ -683,7 +1012,10 @@ def interactive_loop(
     *,
     query_catalog: Mapping[str, str] | None = None,
 ) -> None:
-    print("Channels are ready. Enter 'query-id <ID>', 'query <text>', 'user <id>', or :quit.")
+    print(
+        "Channels are ready. Enter 'query-id <ID>', 'query <text>', "
+        "'user <id>', 'user-query <user_id> <query>', or :quit."
+    )
     catalog = query_catalog or load_query_catalog()
     while True:
         try:
@@ -696,16 +1028,28 @@ def interactive_loop(
         if not command:
             continue
         input_type, separator, value = command.partition(" ")
-        if input_type not in {"query-id", "query", "user"} or not separator or not value.strip():
-            print("Invalid command. Use 'query-id <ID>', 'query <text>', 'user <id>', or :quit.")
+        if input_type not in {"query-id", "query", "user", "user-query"} or not separator or not value.strip():
+            print(
+                "Invalid command. Use 'query-id <ID>', 'query <text>', "
+                "'user <id>', 'user-query <user_id> <query>', or :quit."
+            )
             continue
         try:
             if input_type == "query-id":
                 query_id, query = resolve_catalog_query(value, catalog)
                 _, json_path, html_path = session.run("query", query, query_id=query_id)
+            elif input_type == "user-query":
+                user_id, user_separator, query = value.strip().partition(" ")
+                if not user_separator or not query.strip():
+                    raise ValueError("user-query requires '<user_id> <query>'")
+                _, json_path, html_path = session.run(
+                    "query",
+                    query,
+                    user_id=user_id,
+                )
             else:
                 _, json_path, html_path = session.run(input_type, value)
-        except (QueryTranslationError, ValueError) as error:
+        except (QueryIntentError, QueryTranslationError, ValueError) as error:
             print(f"Audit error: {error}")
             continue
         print_report_paths(json_path, html_path)
@@ -713,6 +1057,7 @@ def interactive_loop(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
+    default_fusion_config = FusionConfig()
     parser.add_argument("--scope", choices=PROCESSED_ROOTS, default="full")
     parser.add_argument("--channels", nargs="+", choices=CHANNELS, required=True)
     query_group = parser.add_mutually_exclusive_group()
@@ -720,6 +1065,19 @@ def parse_args() -> argparse.Namespace:
     query_group.add_argument("--query-id")
     parser.add_argument("--user-id")
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--dense-k", type=int, default=default_fusion_config.dense_k)
+    parser.add_argument("--bm25-k", type=int, default=default_fusion_config.bm25_k)
+    parser.add_argument(
+        "--lightgcn-k",
+        type=int,
+        default=default_fusion_config.lightgcn_k,
+    )
+    parser.add_argument(
+        "--popularity-k",
+        type=int,
+        default=default_fusion_config.popularity_k,
+    )
+    parser.add_argument("--rrf-k", type=int, default=default_fusion_config.rrf_k)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--qdrant-url")
     parser.add_argument("--output-prefix", type=Path)
@@ -730,11 +1088,20 @@ def main() -> None:
     args = parse_args()
     settings = Settings()
     try:
+        fusion_config = FusionConfig(
+            dense_k=args.dense_k,
+            bm25_k=args.bm25_k,
+            lightgcn_k=args.lightgcn_k,
+            popularity_k=args.popularity_k,
+            final_top_k=args.top_k,
+            rrf_k=args.rrf_k,
+        )
         channels = load_channels(
             scope=args.scope,
             channel_names=args.channels,
             qdrant_url=args.qdrant_url or settings.qdrant_url,
             device=args.device,
+            fusion_config=fusion_config,
         )
         session = AuditSession(
             channels,
@@ -748,15 +1115,31 @@ def main() -> None:
             return
         if args.query_id is not None:
             query_id, query = resolve_catalog_query(args.query_id, load_query_catalog())
-            _, json_path, html_path = session.run("query", query, query_id=query_id)
+            _, json_path, html_path = session.run(
+                "query",
+                query,
+                query_id=query_id,
+                user_id=args.user_id if "fusion" in args.channels else None,
+            )
             print_report_paths(json_path, html_path)
         if args.query is not None:
-            _, json_path, html_path = session.run("query", args.query)
+            _, json_path, html_path = session.run(
+                "query",
+                args.query,
+                user_id=args.user_id if "fusion" in args.channels else None,
+            )
             print_report_paths(json_path, html_path)
-        if args.user_id is not None:
+        should_write_user_report = (
+            args.user_id is not None
+            and (
+                (args.query is None and args.query_id is None)
+                or any(name in USER_CHANNELS for name in args.channels)
+            )
+        )
+        if should_write_user_report:
             _, json_path, html_path = session.run("user", args.user_id)
             print_report_paths(json_path, html_path)
-    except (QueryTranslationError, ValueError) as error:
+    except (QueryIntentError, QueryTranslationError, ValueError) as error:
         raise SystemExit(str(error)) from error
 
 
