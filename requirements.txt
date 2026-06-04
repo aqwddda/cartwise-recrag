@@ -12,3 +12,7 @@ rank-bm25
 openai 
 pyarrow
 torch-geometric
+langchain
+langchain-huggingface
+langchain-qdrant
+langchain-text-splitters

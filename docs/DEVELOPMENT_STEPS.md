@@ -687,19 +687,37 @@ tests/test_evidence_rag.py
 - 评论 RAG 使用独立 embedding 配置和独立 Qdrant collection。初始 embedding 模型可以
   与商品 Dense 同为 E5，但不得复用 `cartwise/retrieval/dense.py` 或
   `cartwise/retrieval/bm25.py` 中的商品召回模块。
-- 评论向量 payload 至少包含 `review_id`、`parent_asin`、`rating`、`title`、`text`、
-  `helpful_vote`、`verified_purchase` 和 `timestamp`。
+- 评论索引使用 LangChain `RecursiveCharacterTextSplitter` 切分评论文本，按 embedding
+  tokenizer 计算长度，配置固定为 `chunk_size=384` tokens、`chunk_overlap=64` tokens。
+- 未超过 `chunk_size` 的评论保持单 chunk；超过上限的评论切成多个 chunk。多个 chunk
+  共享同一个 `review_id`，但使用不同 `chunk_id` 写入 Qdrant。
+- 评论向量 payload 至少包含 `review_id`、`chunk_id`、`parent_asin`、`rating`、
+  `title`、`text`、`chunk_text`、`helpful_vote`、`verified_purchase` 和 `timestamp`。
 - 离线构建时记录索引评论数、商品覆盖数、embedding 模型名、Qdrant collection 名称和
-  构建耗时。
+  构建耗时、chunk 数、发生切分的评论数和 token 长度分布。
 
 ### 在线 RAG 规则
 
 - `cartwise/core/evidence_rag.py` 是阶段 8 的评论证据 RAG 模块，负责评论检索、
   Prompt 编排、LLM 调用、结构化输出校验和模板回退。
 - 推荐搜索模块与评论 RAG 模块只通过阶段 7 fusion 后的商品 ID 和商品 metadata 交互。
-- 在线检索输入为原始用户 query 和阶段 7 入选商品 `parent_asin` 列表。
+- 在线检索输入为阶段 7 已用于 Dense/BM25 召回的英文 query、阶段 7 入选商品
+  `parent_asin` 列表和商品 metadata。中文 query 不在评论 RAG 阶段再次翻译。
+- 每个商品的评论检索 query 由英文 query、商品标题和商品类目共同构造，用于提高评论证据
+  与当前商品和用户需求的匹配度。
 - 评论检索必须限制在 fusion 传入的商品范围内，不能通过评论索引引入新的商品候选。
-- 每个入选商品最多返回 3 条评论证据，用于解释生成和前端展示。
+- 每个入选商品使用渐进式评论 chunk 召回：先检索 `initial_chunk_k=10` 个 chunk，
+  按检索顺序收集 `final_review_k=5` 个不同 `review_id`；如果不足 5 个，再扩大检索，
+  最多到 `max_candidate_chunk_k=20` 个 chunk。
+- 达到 5 个不同 `review_id` 后立即停止；如果检索到 20 个 chunk 后仍不足 5 个
+  `review_id`，则返回实际可用的评论证据数量。
+- 如果同一个 `review_id` 命中多个 chunk，这些命中 chunk 全部保留并传入解释生成 Prompt。
+- 评论证据以 Dense 相似度召回为主；每个商品最终评论证据中优先保证至少 1 条
+  `rating <= 3` 的中低评分评论，用于支持潜在缺点说明。
+- 如果主召回结果中没有中低评分评论，则在同一商品和同一 query 下追加一次带
+  `rating <= 3` 过滤的补充召回。补充结果用于补足不足 5 条的结果，或替换主召回中
+  排名最低的一条证据；如果该商品没有可用中低评分评论，则不强行补充。
+- 解释生成 Prompt 使用命中的 `chunk_text` 和评论元数据，不要求放入完整评论正文。
 
 ### 解释生成规则
 
@@ -711,6 +729,7 @@ tests/test_evidence_rag.py
   和 `cited_review_ids`。
 - `reason` 和 `potential_cons` 必须基于输入商品 metadata 和评论证据，不允许使用候选外商品。
 - `cited_review_ids` 只能引用当前商品对应的已检索评论。
+- LLM 输出只能引用 `review_id`，不能引用 `chunk_id`。
 
 ### LLM 禁止事项
 
