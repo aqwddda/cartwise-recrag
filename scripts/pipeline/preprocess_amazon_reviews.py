@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import heapq
 import json
 import re
@@ -29,6 +30,9 @@ SPLIT_PATHS = {
 METADATA_PATH = "raw/meta_categories/meta_Musical_Instruments.jsonl.gz"
 REVIEWS_PATH = "raw/review_categories/Musical_Instruments.jsonl.gz"
 PRICE_PATTERN = re.compile(r"\d[\d,]*(?:\.\d+)?")
+DEFAULT_MAX_REVIEWS_PER_ITEM = 70
+DEFAULT_MAX_LOW_RATING_REVIEWS_PER_ITEM = 14
+LOW_RATING_THRESHOLD = 3.0
 
 ITEM_SCHEMA = pa.schema(
     [
@@ -54,6 +58,7 @@ INTERACTION_SCHEMA = pa.schema(
 )
 REVIEW_SCHEMA = pa.schema(
     [
+        ("review_id", pa.string()),
         ("parent_asin", pa.string()),
         ("asin", pa.string()),
         ("user_id", pa.string()),
@@ -76,7 +81,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Keep only the N most frequent training items for a development run.",
     )
-    parser.add_argument("--max-reviews-per-item", type=int, default=10)
+    parser.add_argument(
+        "--max-reviews-per-item", type=int, default=DEFAULT_MAX_REVIEWS_PER_ITEM
+    )
+    parser.add_argument(
+        "--max-low-rating-reviews-per-item",
+        type=int,
+        default=DEFAULT_MAX_LOW_RATING_REVIEWS_PER_ITEM,
+    )
     return parser.parse_args()
 
 
@@ -356,11 +368,26 @@ def review_signature(row: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def build_review_id(row: Mapping[str, Any]) -> str:
+    payload = json.dumps(
+        review_signature(row),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return "rvw_" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
 def select_reviews(
-    raw_root: Path, selected_items: set[str], max_reviews_per_item: int
+    raw_root: Path,
+    selected_items: set[str],
+    max_reviews_per_item: int,
+    max_low_rating_reviews_per_item: int,
+    low_rating_threshold: float = LOW_RATING_THRESHOLD,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     if max_reviews_per_item <= 0:
         raise ValueError("--max-reviews-per-item must be greater than zero")
+    if max_low_rating_reviews_per_item < 0:
+        raise ValueError("--max-low-rating-reviews-per-item must not be negative")
 
     general_heaps: dict[str, list[tuple[tuple[int, int, int], int, dict[str, Any]]]] = (
         defaultdict(list)
@@ -368,7 +395,7 @@ def select_reviews(
     low_rating_heaps: dict[
         str, list[tuple[tuple[int, int, int], int, dict[str, Any]]]
     ] = defaultdict(list)
-    low_rating_capacity = min(2, max_reviews_per_item)
+    low_rating_capacity = min(max_low_rating_reviews_per_item, max_reviews_per_item)
     source_rows = 0
     catalog_source_rows = 0
     missing_text_rows = 0
@@ -399,7 +426,7 @@ def select_reviews(
         push_ranked_review(
             general_heaps[parent_asin], row, sequence, max_reviews_per_item
         )
-        if row["rating"] <= 2.0:
+        if row["rating"] <= low_rating_threshold and low_rating_capacity > 0:
             push_ranked_review(
                 low_rating_heaps[parent_asin], row, sequence, low_rating_capacity
             )
@@ -414,6 +441,8 @@ def select_reviews(
             if signature in signatures:
                 continue
             signatures.add(signature)
+            row = dict(row)
+            row["review_id"] = build_review_id(row)
             selected_reviews.append(row)
             if len(signatures) == max_reviews_per_item:
                 break
@@ -428,8 +457,9 @@ def select_reviews(
         - len(selected_reviews),
         "items_with_reviews": len({row["parent_asin"] for row in selected_reviews}),
         "low_rating_rows_retained": sum(
-            row["rating"] <= 2.0 for row in selected_reviews
+            row["rating"] <= low_rating_threshold for row in selected_reviews
         ),
+        "low_rating_threshold": low_rating_threshold,
     }
 
 
@@ -448,7 +478,8 @@ def run_preprocessing(
     raw_root: Path = DEFAULT_RAW_ROOT,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     max_items: int | None = None,
-    max_reviews_per_item: int = 10,
+    max_reviews_per_item: int = DEFAULT_MAX_REVIEWS_PER_ITEM,
+    max_low_rating_reviews_per_item: int = DEFAULT_MAX_LOW_RATING_REVIEWS_PER_ITEM,
 ) -> dict[str, Any]:
     print("[1/5] Scanning official interaction splits")
     all_items, training_counts, source_interaction_rows = scan_interaction_catalog(
@@ -466,7 +497,10 @@ def run_preprocessing(
 
     print("[4/5] Selecting review evidence candidates")
     review_rows, review_stats = select_reviews(
-        raw_root, selected_items, max_reviews_per_item
+        raw_root,
+        selected_items,
+        max_reviews_per_item,
+        max_low_rating_reviews_per_item,
     )
     write_parquet_rows(output_root / "reviews.parquet", review_rows, REVIEW_SCHEMA)
 
@@ -474,6 +508,7 @@ def run_preprocessing(
         "dataset": "Amazon Reviews 2023 Musical_Instruments",
         "max_items": max_items,
         "max_reviews_per_item": max_reviews_per_item,
+        "max_low_rating_reviews_per_item": max_low_rating_reviews_per_item,
         "items": item_stats,
         "interactions": interaction_stats,
         "reviews": review_stats,
@@ -491,6 +526,7 @@ def main() -> None:
         output_root=args.output_root,
         max_items=args.max_items,
         max_reviews_per_item=args.max_reviews_per_item,
+        max_low_rating_reviews_per_item=args.max_low_rating_reviews_per_item,
     )
 
 

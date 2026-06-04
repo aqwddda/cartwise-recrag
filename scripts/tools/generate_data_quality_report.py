@@ -126,7 +126,7 @@ def generate_report(processed_root: Path, output: Path) -> None:
             f"| Duplicate metadata rows ignored | {stats['items']['duplicate_metadata_rows']:,} | n/a |",
             f"| Catalog review rows with empty text ignored | {missing_review_text:,} | {ratio(missing_review_text, review_catalog_rows)} |",
             f"| Eligible review rows removed by per-item cap or final deduplication | {filtered_reviews:,} | {ratio(filtered_reviews, eligible_reviews)} |",
-            f"| Retained low-rating review rows | {stats['reviews']['low_rating_rows_retained']:,} | {ratio(stats['reviews']['low_rating_rows_retained'], review_count)} |",
+            f"| Retained low/mid-rating review rows | {stats['reviews']['low_rating_rows_retained']:,} | {ratio(stats['reviews']['low_rating_rows_retained'], review_count)} |",
             "",
             "## Notes",
             "",

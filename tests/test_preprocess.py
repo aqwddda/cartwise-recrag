@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from scripts.pipeline.preprocess_amazon_reviews import (
+    build_review_id,
     parse_price,
     run_preprocessing,
     validate_chronology,
@@ -91,5 +92,10 @@ def test_run_preprocessing_writes_linked_bounded_artifacts(tmp_path: Path) -> No
     reviews = pq.read_table(output_root / "reviews.parquet").to_pylist()
     assert {item["parent_asin"] for item in items} == {"P1", "P2"}
     assert Counter(review["parent_asin"] for review in reviews) == {"P1": 2, "P2": 1}
+    assert all(review["review_id"].startswith("rvw_") for review in reviews)
+    assert len({review["review_id"] for review in reviews}) == len(reviews)
+    assert reviews[0]["review_id"] == build_review_id(reviews[0])
     assert any(review["rating"] == 1.0 for review in reviews)
+    assert stats["reviews"]["low_rating_threshold"] == 3.0
+    assert stats["reviews"]["low_rating_rows_retained"] == 2
     assert stats["interactions"]["chronology_valid"] is True

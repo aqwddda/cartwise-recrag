@@ -57,7 +57,7 @@ def test_weighted_rrf_merges_sources_and_prefers_multi_source_items() -> None:
     assert top["fusion_score"] == pytest.approx(0.65 / 62 + 0.30 / 61)
 
 
-def test_search_source_uses_conservative_filter_when_item_also_personalized() -> None:
+def test_search_source_applies_category_filter_when_item_also_personalized() -> None:
     output = fuse_candidates(
         {
             "dense": [candidate("A", rank=1, categories=[])],
@@ -68,8 +68,10 @@ def test_search_source_uses_conservative_filter_when_item_also_personalized() ->
         known_user=True,
     )
 
-    assert [record["parent_asin"] for record in output.final_results] == ["A"]
-    assert output.filtered_results == []
+    assert output.final_results == []
+    assert output.filtered_results[0]["parent_asin"] == "A"
+    assert output.filtered_results[0]["filter_policy"] == "search"
+    assert output.filtered_results[0]["filter_reason"] == "category_missing"
 
 
 def test_personalized_only_candidates_need_mapped_category_constraint() -> None:

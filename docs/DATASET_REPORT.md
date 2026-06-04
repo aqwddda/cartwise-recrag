@@ -7,9 +7,9 @@
 | Catalog items | 24,587 |
 | Users | 57,439 |
 | Retained interactions | 511,836 |
-| Retained review evidence candidates | 240,525 |
+| Retained review evidence candidates | 930,750 |
 | Items with retained reviews | 24,587 |
-| Maximum retained reviews for one item | 10 |
+| Maximum retained reviews for one item | 70 |
 
 ## Processed Dataset Schema
 
@@ -22,7 +22,7 @@ All product joins use `parent_asin` as the unified product key.
 | `interactions_train.parquet` | 396,958 | Training interactions used to build recommendation models |
 | `interactions_valid.parquet` | 57,439 | Chronologically later validation interactions |
 | `interactions_test.parquet` | 57,439 | Chronologically later test interactions |
-| `reviews.parquet` | 240,525 | Review evidence candidates, limited to at most 10 reviews per product |
+| `reviews.parquet` | 930,750 | Review evidence candidates, limited to at most 70 reviews per product |
 
 ### `items.parquet`
 
@@ -55,6 +55,7 @@ All product joins use `parent_asin` as the unified product key.
 
 | Field | Type | Description |
 |---|---|---|
+| `review_id` | `string` | Stable review identifier generated from source review fields |
 | `parent_asin` | `string` | Unified product identifier |
 | `asin` | `string` | Identifier of the reviewed product variant |
 | `user_id` | `string` | Review author identifier |
@@ -134,14 +135,14 @@ fewer than ten products.
 | Metadata items absent from source metadata | 0 | 0.00% |
 | Duplicate metadata rows ignored | 0 | n/a |
 | Catalog review rows with empty text ignored | 1,770 | 0.08% |
-| Eligible review rows removed by per-item cap or final deduplication | 1,877,058 | 88.64% |
-| Retained low-rating review rows | 45,485 | 18.91% |
+| Eligible review rows removed by per-item cap or final deduplication | 1,186,833 | 56.05% |
+| Retained low/mid-rating review rows | 200,410 | 21.53% |
 
 ## Product Review Distribution
 
 The `5core` scope below includes all raw reviews associated with products present
 in the official `5core` dataset. These values are calculated before applying the
-review evidence limit of 10 reviews per product.
+review evidence limit of 70 reviews per product.
 
 | Metric | All raw products | Products present in `5core` |
 |---|---:|---:|
