@@ -50,10 +50,6 @@ class RecommendationService:
         self.fusion_config = fusion_config
 
     def recommend(self, request: RecommendationRequest) -> RecommendationResult:
-        if request.mode == "smoke_search_only":
-            return self._recommend_smoke_search_only(request)
-        if request.mode != "fusion":
-            raise ValueError(f"unsupported recommendation mode: {request.mode}")
         config = (
             replace(self.fusion_config, final_top_k=request.top_k)
             if request.top_k is not None
@@ -102,50 +98,6 @@ class RecommendationService:
                 "search_query": intent.search_query,
                 "product_terms": list(intent.product_terms),
                 "raw_filters": _filter_constraints_payload(intent.filters),
-            },
-            filter_constraints=constraints,
-            filter_constraints_payload=_filter_constraints_payload(constraints),
-            candidates_by_channel=candidates_by_channel,
-            fusion_output=output,
-            final_candidates=output.final_results,
-        )
-
-    def _recommend_smoke_search_only(
-        self,
-        request: RecommendationRequest,
-    ) -> RecommendationResult:
-        config = (
-            replace(self.fusion_config, final_top_k=request.top_k)
-            if request.top_k is not None
-            else self.fusion_config
-        )
-        constraints = FilterConstraints()
-        candidates_by_channel = {
-            DENSE_CHANNEL: [
-                candidate
-                for candidate in self._dense_candidates(request.query, config.dense_k)
-                if candidate["parent_asin"] in self.items_by_parent_asin
-            ],
-            BM25_CHANNEL: [
-                candidate
-                for candidate in self._bm25_candidates(request.query, config.bm25_k)
-                if candidate["parent_asin"] in self.items_by_parent_asin
-            ],
-        }
-        output = self.fusion_function(
-            candidates_by_channel,
-            constraints,
-            config=config,
-            known_user=False,
-        )
-        return RecommendationResult(
-            query=request.query,
-            search_query=request.query,
-            known_user=False,
-            intent={
-                "search_query": request.query,
-                "product_terms": [],
-                "raw_filters": _filter_constraints_payload(constraints),
             },
             filter_constraints=constraints,
             filter_constraints_payload=_filter_constraints_payload(constraints),

@@ -4,7 +4,6 @@ from cartwise.application.service import RecommendationApplicationService
 from cartwise.application.types import ApplicationRecommendationRequest
 from cartwise.evidence.service import EvidenceService
 from cartwise.recommendation.service import RecommendationService
-from cartwise.recommendation.types import RecommendationRequest
 from cartwise.retrieval.fusion import FusionConfig
 from tests.regression.legacy_harness import (
     FakeBM25Retriever,
@@ -76,16 +75,13 @@ def test_application_service_preserves_empty_recommendation_shape() -> None:
     assert result.evidence_result.explanations == []
 
 
-def test_application_service_supports_smoke_search_only_mode() -> None:
-    result = build_application(no_evidence=True).recommend(
-        ApplicationRecommendationRequest(
+def test_application_request_does_not_accept_smoke_mode() -> None:
+    try:
+        ApplicationRecommendationRequest(  # type: ignore[call-arg]
             query="guitar tuner for beginners",
-            top_k=2,
             mode="smoke_search_only",
         )
-    )
-
-    assert result.search_query == "guitar tuner for beginners"
-    assert result.known_user is False
-    assert result.applied_constraints["category_tags"] == []
-    assert [item.parent_asin for item in result.recommendations] == ["TUNER_A", "TUNER_B"]
+    except TypeError as error:
+        assert "mode" in str(error)
+    else:
+        raise AssertionError("ApplicationRecommendationRequest accepted smoke-only mode")

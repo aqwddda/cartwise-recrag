@@ -90,3 +90,15 @@ def test_recommendation_service_preserves_empty_candidate_shape() -> None:
         "MIC_A",
         "OVER_BUDGET",
     ]
+
+
+def test_recommendation_request_does_not_accept_smoke_mode() -> None:
+    try:
+        RecommendationRequest(  # type: ignore[call-arg]
+            query="guitar tuner for beginners",
+            mode="smoke_search_only",
+        )
+    except TypeError as error:
+        assert "mode" in str(error)
+    else:
+        raise AssertionError("RecommendationRequest accepted smoke-only mode")

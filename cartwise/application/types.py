@@ -15,7 +15,6 @@ class ApplicationRecommendationRequest:
     query: str
     user_id: str | None = None
     top_k: int | None = None
-    mode: str = "fusion"
 
 
 @dataclass(frozen=True, slots=True)

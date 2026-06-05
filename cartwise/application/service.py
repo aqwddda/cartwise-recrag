@@ -32,7 +32,6 @@ class RecommendationApplicationService:
                 query=request.query,
                 user_id=request.user_id,
                 top_k=request.top_k,
-                mode=request.mode,
             )
         )
         candidates = tuple(

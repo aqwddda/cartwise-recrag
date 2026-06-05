@@ -13,8 +13,6 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
-from cartwise.application.service import RecommendationApplicationService
-from cartwise.application.types import ApplicationRecommendationRequest
 from cartwise.core.config import Settings
 from cartwise.evidence.rag import (
     EvidenceRagConfig,
@@ -22,7 +20,6 @@ from cartwise.evidence.rag import (
     QdrantReviewEvidenceRetriever,
 )
 from cartwise.evidence.service import EvidenceService
-from cartwise.recommendation.service import RecommendationService
 from cartwise.retrieval.bm25 import BM25Index, BM25Retriever
 from cartwise.retrieval.dense import DenseRetriever
 from cartwise.retrieval.dense import collection_name as dense_collection_name
@@ -32,6 +29,7 @@ from scripts.paths import ARTIFACT_REPORTS_ROOT, PRODUCT_BM25_ARTIFACT_ROOT, PRO
 from scripts.pipeline.build_evidence_index import collection_name as evidence_collection_name
 from scripts.pipeline.build_evidence_index import DEFAULT_REVIEW_EMBEDDING_MODEL
 from scripts.tools.item_metadata import load_items_by_parent_asin
+from scripts.tools.stage8_smoke_adapter import Stage8SmokeAdapter
 
 
 DEFAULT_QUERY = "guitar tuner for beginners"
@@ -55,15 +53,6 @@ class RecordingGenerator:
             }
         )
         return self.last_content
-
-
-class _UnusedPersonalization:
-    user_to_index: dict[str, int] = {}
-    item_counts: dict[str, int] = {}
-
-    def recommend(self, user_id: str, *, k: int) -> list[str]:
-        del user_id, k
-        return []
 
 
 def parse_args() -> argparse.Namespace:
@@ -367,12 +356,10 @@ def main() -> None:
         generator=generator,
         config=evidence_config,
     )
-    recommendation_service = RecommendationService(
-        intent_parser=None,
+    smoke_adapter = Stage8SmokeAdapter(
         dense_retriever=dense_retriever,
         bm25_retriever=bm25_retriever,
-        lightgcn_recommender=_UnusedPersonalization(),
-        popularity_recommender=_UnusedPersonalization(),
+        evidence_service=evidence_service,
         items_by_parent_asin=items_by_parent_asin,
         fusion_config=FusionConfig(
             dense_k=args.dense_k,
@@ -380,26 +367,15 @@ def main() -> None:
             final_top_k=args.top_k,
         ),
     )
-    application_service = RecommendationApplicationService(
-        recommendation_service=recommendation_service,
-        evidence_service=evidence_service,
-    )
-    application_result = application_service.recommend(
-        ApplicationRecommendationRequest(
-            query=args.query,
-            top_k=args.top_k,
-            mode="smoke_search_only",
-        )
-    )
-    recommendation_result = application_result.recommendation_result
+    smoke_result = smoke_adapter.run(query=args.query, top_k=args.top_k)
     dense_candidates = list(
-        recommendation_result.candidates_by_channel.get(DENSE_CHANNEL, ())
+        smoke_result.candidates_by_channel.get(DENSE_CHANNEL, ())
     )
     bm25_candidates = list(
-        recommendation_result.candidates_by_channel.get(BM25_CHANNEL, ())
+        smoke_result.candidates_by_channel.get(BM25_CHANNEL, ())
     )
-    fusion = recommendation_result.fusion_output
-    explanations = list(application_result.evidence_result.explanations)
+    fusion = smoke_result.fusion_output
+    explanations = list(smoke_result.evidence_result.explanations)
 
     report = build_report(
         args=args,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from cartwise.query.types import FilterConstraints
 from cartwise.retrieval.fusion import FusionOutput
@@ -52,7 +52,6 @@ class RecommendationRequest:
     query: str
     user_id: str | None = None
     top_k: int | None = None
-    mode: Literal["fusion", "smoke_search_only"] = "fusion"
 
 
 @dataclass(frozen=True, slots=True)
