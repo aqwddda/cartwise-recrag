@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from cartwise.paths import PROCESSED_ROOT
 from cartwise.retrieval.filters import (
+    DEFAULT_BRAND_ALIAS_TO_CANONICAL_PATH,
+    DEFAULT_ITEM_TO_CATEGORIES_PATH,
     FilterConstraints,
     apply_hard_filters,
     derive_category_tags,
@@ -31,6 +34,14 @@ def make_item(
         "categories": categories or [],
         "details_json": json.dumps(details or {}),
     }
+
+
+def test_default_mapping_paths_use_shared_processed_root() -> None:
+    assert DEFAULT_ITEM_TO_CATEGORIES_PATH == PROCESSED_ROOT / "item_to_categories.json"
+    assert (
+        DEFAULT_BRAND_ALIAS_TO_CANONICAL_PATH
+        == PROCESSED_ROOT / "brand_alias_to_canonical.json"
+    )
 
 
 def test_derive_category_tags_uses_all_product_categories() -> None:
