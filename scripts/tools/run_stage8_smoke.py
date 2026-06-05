@@ -14,7 +14,7 @@ import httpx
 from openai import OpenAI
 
 from cartwise.core.config import Settings
-from cartwise.core.evidence_rag import (
+from cartwise.evidence.rag import (
     EvidenceRagConfig,
     OpenAICompatibleExplanationGenerator,
     QdrantReviewEvidenceRetriever,
