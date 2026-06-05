@@ -680,6 +680,8 @@ git commit -m "feat: add candidate fusion"
 ```text
 scripts/pipeline/build_evidence_index.py
 cartwise/core/evidence_rag.py
+scripts/tools/run_stage8_smoke.py
+tests/test_build_evidence_index.py
 tests/test_evidence_rag.py
 ```
 
@@ -765,6 +767,14 @@ tests/test_evidence_rag.py
 - LangChain 评论 RAG 只读取传入的候选商品和评论证据。
 - 每个解释结果只能引用对应商品的 `review_id`。
 - LLM 不可用、输出非法或引用非法时，返回确定性模板解释。
+- 只读真实链路 smoke 可以生成包含召回商品、LLM 解释、引用证据和完整证据文本的 JSON/TXT 报告。
+
+### 验收命令
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_build_evidence_index.py tests/test_evidence_rag.py tests/test_fusion.py
+.\.venv\Scripts\python.exe -m scripts.tools.run_stage8_smoke --scope full --query "guitar tuner for beginners" --top-k 5 --dense-k 10 --bm25-k 10 --device cuda
+```
 
 ### 提交
 
