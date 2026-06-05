@@ -111,6 +111,19 @@ def test_personalized_only_candidates_use_full_filters_and_report_reason() -> No
     assert output.filtered_results[0]["filter_reason"] == "category_mismatch"
 
 
+def test_fusion_accepts_empty_material_constraints() -> None:
+    output = fuse_candidates(
+        {
+            "dense": [candidate("A", rank=1, categories=["Accessories"])],
+        },
+        FilterConstraints(),
+        config=FusionConfig(final_top_k=10),
+        known_user=False,
+    )
+
+    assert [record["parent_asin"] for record in output.final_results] == ["A"]
+
+
 def test_final_top_k_truncates_ranked_results_without_dropping_full_sequence() -> None:
     output = fuse_candidates(
         {

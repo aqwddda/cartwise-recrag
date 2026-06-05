@@ -49,8 +49,19 @@ class FakeVectorStore:
 
 
 class FakeEmbeddings:
-    def embed_documents(self, texts):
-        return [[float(index), 1.0] for index, _ in enumerate(texts)]
+    def encode(
+        self,
+        texts,
+        *,
+        batch_size,
+        normalize_embeddings,
+        convert_to_numpy,
+        show_progress_bar,
+    ):
+        return [
+            SimpleNamespace(tolist=lambda index=index: [float(index), 1.0])
+            for index, _ in enumerate(texts)
+        ]
 
 
 class FakeQdrantClient:
@@ -134,7 +145,12 @@ def test_qdrant_payload_keeps_minimum_retrieval_metadata() -> None:
         "review_id": "rvw_a",
         "chunk_id": "rvw_a#chunk_0",
         "rating": 5.0,
+        "title": "Great",
+        "text": "Works well for beginners.",
         "chunk_text": documents[0].metadata["chunk_text"],
+        "helpful_vote": 3,
+        "verified_purchase": True,
+        "timestamp": 10,
     }
 
 
@@ -151,8 +167,9 @@ def test_upsert_documents_to_qdrant_batches_points() -> None:
     )
 
     assert added == 2
-    assert len(client.calls) == 2
+    assert len(client.calls) == 1
     assert client.calls[0]["collection_name"] == "reviews"
     assert client.calls[0]["wait"] is False
     assert client.calls[0]["points"][0].id == documents[0].id
     assert client.calls[0]["points"][0].payload["review_id"] == "rvw_a"
+    assert client.calls[0]["points"][1].id == documents[1].id

@@ -32,6 +32,23 @@ DEFAULT_CHUNK_OVERLAP = 64
 DEFAULT_BATCH_SIZE = 512
 DEFAULT_REVIEW_BATCH_SIZE = 5_000
 REVIEW_POINT_NAMESPACE = uuid.UUID("d905ef4d-b156-43e9-a02c-00e439a1f17d")
+REVIEW_TEXT_FIELDS = (
+    ("Review title", "title"),
+    ("Rating", "rating"),
+    ("Review text", "text"),
+)
+QDRANT_PAYLOAD_FIELDS = (
+    "parent_asin",
+    "review_id",
+    "chunk_id",
+    "rating",
+    "title",
+    "text",
+    "chunk_text",
+    "helpful_vote",
+    "verified_purchase",
+    "timestamp",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +112,15 @@ def review_point_id(chunk_id: str) -> str:
     return str(uuid.uuid5(REVIEW_POINT_NAMESPACE, chunk_id))
 
 
-def load_reviews(processed_root: Path) -> list[dict[str, Any]]:
+def reviews_parquet_path(processed_root: Path) -> Path:
     path = processed_root / "reviews.parquet"
     if not path.exists():
         raise FileNotFoundError(f"reviews parquet not found: {path}")
-    return pq.read_table(path).to_pylist()
+    return path
+
+
+def load_reviews(processed_root: Path) -> list[dict[str, Any]]:
+    return pq.read_table(reviews_parquet_path(processed_root)).to_pylist()
 
 
 def iter_review_batches(
@@ -109,9 +130,7 @@ def iter_review_batches(
 ) -> tuple[Path, int, Any]:
     if batch_size <= 0:
         raise ValueError("review_batch_size must be greater than zero")
-    path = processed_root / "reviews.parquet"
-    if not path.exists():
-        raise FileNotFoundError(f"reviews parquet not found: {path}")
+    path = reviews_parquet_path(processed_root)
     parquet_file = pq.ParquetFile(path)
     return path, parquet_file.metadata.num_rows, parquet_file.iter_batches(
         batch_size=batch_size
@@ -119,15 +138,70 @@ def iter_review_batches(
 
 
 def build_review_text(review: Mapping[str, Any]) -> str:
-    fields = [
-        ("Review title", review.get("title")),
-        ("Rating", review.get("rating")),
-        ("Review text", review.get("text")),
-    ]
     return "\n".join(
         f"{label}: {value}"
-        for label, value in fields
-        if value is not None and str(value).strip()
+        for label, field_name in REVIEW_TEXT_FIELDS
+        if (value := review.get(field_name)) is not None and str(value).strip()
+    )
+
+
+def document_metadata(
+    review: Mapping[str, Any],
+    *,
+    review_id: str,
+    parent_asin: str,
+    chunk_id: str,
+    chunk_text: str,
+) -> dict[str, Any]:
+    return {
+        "chunk_id": chunk_id,
+        "review_id": review_id,
+        "parent_asin": parent_asin,
+        "rating": review.get("rating"),
+        "title": review.get("title"),
+        "text": review.get("text"),
+        "chunk_text": chunk_text,
+        "helpful_vote": review.get("helpful_vote"),
+        "verified_purchase": review.get("verified_purchase"),
+        "timestamp": review.get("timestamp"),
+    }
+
+
+def parent_asins_from_reviews(reviews: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        str(review["parent_asin"])
+        for review in reviews
+        if review.get("parent_asin") is not None
+    }
+
+
+def token_lengths_for_reviews(
+    reviews: Sequence[Mapping[str, Any]],
+    *,
+    length_function: Callable[[str], int],
+) -> list[int]:
+    return [
+        length_function(build_review_text(review))
+        for review in reviews
+    ]
+
+
+def token_lengths_for_documents(
+    documents: Sequence[Document],
+    *,
+    length_function: Callable[[str], int],
+) -> list[int]:
+    return [
+        length_function(document.metadata["chunk_text"])
+        for document in documents
+    ]
+
+
+def checkpoint_parent_asins(checkpoint: Mapping[str, Any] | None) -> tuple[set[str], bool]:
+    values = checkpoint.get("parent_asins", []) if checkpoint else []
+    return (
+        set(values) if isinstance(values, list) else set(),
+        not isinstance(values, list),
     )
 
 
@@ -187,23 +261,17 @@ def build_review_documents(
             split_reviews += 1
         for chunk_index, chunk_text in enumerate(text_chunks):
             chunk_id = f"{review_id}#chunk_{chunk_index}"
-            metadata = {
-                "chunk_id": chunk_id,
-                "review_id": review_id,
-                "parent_asin": parent_asin,
-                "rating": review.get("rating"),
-                "title": review.get("title"),
-                "text": review.get("text"),
-                "chunk_text": chunk_text,
-                "helpful_vote": review.get("helpful_vote"),
-                "verified_purchase": review.get("verified_purchase"),
-                "timestamp": review.get("timestamp"),
-            }
             documents.append(
                 Document(
                     id=review_point_id(chunk_id),
                     page_content=f"passage: {chunk_text}",
-                    metadata=metadata,
+                    metadata=document_metadata(
+                        review,
+                        review_id=review_id,
+                        parent_asin=parent_asin,
+                        chunk_id=chunk_id,
+                        chunk_text=chunk_text,
+                    ),
                 )
             )
     return documents, {
@@ -259,7 +327,7 @@ def ensure_qdrant_collection(
         if not recreate:
             return
         client.delete_collection(collection)
-    dimension = embeddings.get_embedding_dimension()  # was get_sentence_embedding_dimension
+    dimension = embeddings.get_embedding_dimension()
     client.create_collection(
         collection_name=collection,
         vectors_config=qdrant_models.VectorParams(
@@ -274,13 +342,52 @@ def ensure_qdrant_collection(
 
 def qdrant_payload(document: Document) -> dict[str, Any]:
     metadata = dict(document.metadata)
-    return {
-        "parent_asin": metadata["parent_asin"],
-        "review_id": metadata["review_id"],
-        "chunk_id": metadata["chunk_id"],
-        "rating": metadata["rating"],
-        "chunk_text": metadata["chunk_text"],
-    }
+    return {field: metadata[field] for field in QDRANT_PAYLOAD_FIELDS}
+
+
+def encode_texts_with_retry(
+    *,
+    embeddings: SentenceTransformer,
+    texts: Sequence[str],
+    encode_batch: int,
+    outer_step: int,
+) -> tuple[Any, int]:
+    while True:
+        try:
+            vectors = embeddings.encode(
+                texts,
+                batch_size=encode_batch,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+            return vectors, encode_batch
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower() or encode_batch <= 64:
+                raise
+            previous_batch = encode_batch
+            encode_batch = max(64, encode_batch // 2)
+            print(
+                f"OOM at encode_batch={previous_batch}; "
+                f"falling back to encode_batch={encode_batch} "
+                f"(outer step={outer_step})",
+                flush=True,
+            )
+            torch.cuda.empty_cache()
+
+
+def qdrant_points(
+    documents: Sequence[Document],
+    vectors: Sequence[Any],
+) -> list[qdrant_models.PointStruct]:
+    return [
+        qdrant_models.PointStruct(
+            id=document.id,
+            vector=vector.tolist(),
+            payload=qdrant_payload(document),
+        )
+        for document, vector in zip(documents, vectors, strict=True)
+    ]
 
 
 def upsert_documents_to_qdrant(
@@ -295,51 +402,24 @@ def upsert_documents_to_qdrant(
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero")
     added = 0
-    encode_batch = batch_size  # GPU batch — may shrink on OOM
-    outer_step = batch_size * 2  # accumulate more docs per round to reduce loop overhead
-    cursor = 0
+    encode_batch = batch_size
+    outer_step = batch_size * 2
     total = len(documents)
-    while cursor < total:
-        end = min(cursor + outer_step, total)
-        batch = list(documents[cursor:end])
+    for start in range(0, total, outer_step):
+        batch = list(documents[start : start + outer_step])
         texts = [document.page_content for document in batch]
-        while True:
-            try:
-                vectors = embeddings.encode(
-                    texts,
-                    batch_size=encode_batch,
-                    normalize_embeddings=True,
-                    convert_to_numpy=True,
-                    show_progress_bar=False,
-                )
-                break
-            except RuntimeError as exc:
-                if "out of memory" in str(exc).lower() and encode_batch > 64:
-                    encode_batch = max(64, encode_batch // 2)
-                    print(
-                        f"OOM at encode_batch={encode_batch * 2}; "
-                        f"falling back to encode_batch={encode_batch} "
-                        f"(outer step={outer_step})",
-                        flush=True,
-                    )
-                    torch.cuda.empty_cache()
-                    continue
-                raise
-        points = [
-            qdrant_models.PointStruct(
-                id=document.id,
-                vector=vector.tolist(),
-                payload=qdrant_payload(document),
-            )
-            for document, vector in zip(batch, vectors, strict=True)
-        ]
+        vectors, encode_batch = encode_texts_with_retry(
+            embeddings=embeddings,
+            texts=texts,
+            encode_batch=encode_batch,
+            outer_step=outer_step,
+        )
         client.upsert(
             collection_name=collection,
-            points=points,
+            points=qdrant_points(batch, vectors),
             wait=False,
         )
         added += len(batch)
-        cursor = end
         if progress_callback is not None:
             progress_callback(added)
     return added
@@ -457,13 +537,7 @@ def run_build(
     indexed_documents = int(checkpoint.get("chunks_indexed", 0)) if checkpoint else 0
     split_reviews = int(checkpoint.get("split_reviews", 0)) if checkpoint else 0
     skipped_reviews = int(checkpoint.get("skipped_reviews", 0)) if checkpoint else 0
-    checkpoint_parent_asins = checkpoint.get("parent_asins", []) if checkpoint else []
-    rebuild_parent_asins = not isinstance(checkpoint_parent_asins, list)
-    parent_asins = (
-        set(checkpoint_parent_asins)
-        if isinstance(checkpoint_parent_asins, list)
-        else set()
-    )
+    parent_asins, rebuild_parent_asins = checkpoint_parent_asins(checkpoint)
 
     review_token_lengths: list[int] = []
     chunk_token_lengths: list[int] = []
@@ -472,25 +546,29 @@ def run_build(
     for batch_index, record_batch in enumerate(review_batches):
         if batch_index < start_batch_index:
             if rebuild_parent_asins:
-                parent_asins.update(
-                    str(review["parent_asin"]) for review in record_batch.to_pylist()
-                )
+                parent_asins.update(parent_asins_from_reviews(record_batch.to_pylist()))
             continue
         reviews = record_batch.to_pylist()
         if collect_token_stats:
             review_token_lengths.extend(
-                length_function(build_review_text(review)) for review in reviews
+                token_lengths_for_reviews(
+                    reviews,
+                    length_function=length_function,
+                )
             )
-        parent_asins.update(str(review["parent_asin"]) for review in reviews)
+        parent_asins.update(parent_asins_from_reviews(reviews))
         documents, document_report = build_review_documents(
             reviews,
             split_text=splitter.split_text,
         )
         if collect_token_stats:
             chunk_token_lengths.extend(
-                length_function(document.metadata["chunk_text"])
-                for document in documents
+                token_lengths_for_documents(
+                    documents,
+                    length_function=length_function,
+                )
             )
+
         def chunk_progress(batch_chunks_indexed: int) -> None:
             print(
                 "Upserted "

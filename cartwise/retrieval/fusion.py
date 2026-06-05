@@ -239,7 +239,7 @@ def _filter_reason(
     color_tags = _normalize_strings(constraints.color_tags)
     if color_tags and not color_tags.intersection(derive_color_tags(item)):
         return "color_mismatch"
-    material_tags = _normalize_strings()
+    material_tags = _normalize_strings(constraints.material_tags)
     if material_tags and not material_tags.intersection(derive_material_tags(item)):
         return "material_mismatch"
     return None

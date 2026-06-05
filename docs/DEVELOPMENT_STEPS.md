@@ -1,6 +1,6 @@
 # CartWise 开发步骤
 
-本文档用于指导 CartWise 一期开发。开发原则是先跑通最小闭环，再逐步替换假数据和占位实现。不要同时开发前端、模型和 RAG，以免出现问题时难以定位。
+本文档用于指导 CartWise 一期开发。开发原则是先跑通最小闭环，再逐步替换假数据和占位实现。不要同时开发前端、模型和 RAG，以免出现问题时难以定位。执行具体任务前，优先查看 `docs/CURRENT_STAGE.md`，确认当前阶段、最近成功命令和下一步任务，再回到本文档读取对应阶段细节。
 
 ## 一期目标
 
@@ -14,7 +14,7 @@
 - 使用 LLM 解析意图，并使用 LangChain 基于已验证事实生成中文解释。
 - 使用 FastAPI 提供接口，使用 Streamlit 提供演示页面。
 
-一期暂时不实现 CrossEncoder、Redis、复杂 Agent、商品共购图扩展和多轮会话状态。
+一期暂时不实现 CrossEncoder、Redis、复杂 Agent 和商品共购图扩展。一期只实现轻量内存会话状态，用于支持 `更便宜`、`换一批` 和排除品牌等演示级多轮需求更新；不实现持久化会话、长期记忆、复杂用户画像更新或多智能体编排。
 
 ## 推荐目录结构
 
@@ -60,6 +60,9 @@ tests/
   test_fusion.py
   test_evidence_rag.py
   test_api.py
+docs/
+  CURRENT_STAGE.md
+  DECISIONS.md
 README.md
 requirements.txt
 ```
@@ -73,6 +76,8 @@ requirements.txt
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
 .\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels e5 blair bm25
 ```
+
+`docs/CURRENT_STAGE.md` 是当前开发入口，保持短小，只记录当前阶段和下一步。`docs/DECISIONS.md` 只记录已经确定的关键决策，避免 Agent 被旧方案或未来方案干扰。
 
 自动生成且可重复构建的索引报告、分析报告和预览统一写入 `artifacts/`，不提交 Git。
 用于对比历史实验的 CSV 指标保留在 `reports/metrics/` 并提交 Git。
