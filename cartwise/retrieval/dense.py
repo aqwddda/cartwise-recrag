@@ -14,7 +14,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 
 from cartwise.catalog.documents import build_product_document
-from cartwise.core.llm import QueryTranslator, prepare_search_query
+from cartwise.query.llm import QueryTranslator, prepare_search_query
 
 
 PRODUCT_POINT_NAMESPACE = uuid.UUID("cde786cc-a6b4-4a1b-9b8c-411cd8dd7822")

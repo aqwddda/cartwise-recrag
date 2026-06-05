@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 
 
 from cartwise.core.config import Settings
-from cartwise.core.llm import (
+from cartwise.query.llm import (
     QueryTranslationError,
     contains_chinese_characters,
     create_query_translator,

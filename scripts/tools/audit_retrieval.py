@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from cartwise.core.config import Settings
-from cartwise.core.llm import (
+from cartwise.query.llm import (
     QueryIntentError,
     QueryTranslationError,
     create_query_intent_parser,
