@@ -21,7 +21,7 @@ from pydantic import (
 )
 
 from cartwise.core.config import Settings
-from cartwise.retrieval.filters import FilterConstraints
+from cartwise.query.types import FilterConstraints
 
 CHINESE_CHARACTER_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 TRANSLATION_PROMPT = """Translate the following shopping search query into English.

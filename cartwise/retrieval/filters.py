@@ -11,6 +11,8 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, TypeVar
 
+from cartwise.query.types import FilterConstraints
+
 
 Candidate = TypeVar("Candidate", bound=Mapping[str, Any])
 
@@ -27,19 +29,6 @@ DEFAULT_BRAND_ALIAS_TO_CANONICAL_PATH = (
     / "processed"
     / "brand_alias_to_canonical.json"
 )
-
-
-@dataclass(frozen=True, slots=True)
-class FilterConstraints:
-    """Explicit user constraints applied after candidate ranking."""
-
-    category_tags: Collection[str] = ()
-    min_price: float | None = None
-    max_price: float | None = None
-    brands: Collection[str] = ()
-    excluded_brands: Collection[str] = ()
-    color_tags: Collection[str] = ()
-    material_tags: Collection[str] = ()
 
 
 @dataclass(frozen=True, slots=True)
