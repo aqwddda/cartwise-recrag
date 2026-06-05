@@ -30,17 +30,13 @@ class EvidenceService:
         self.explain_function = explain_function
 
     def explain(self, request: EvidenceRequest) -> EvidenceResult:
-        explanations: list[ProductExplanation] = []
-        for candidate in request.candidates:
-            explanations.extend(
-                self.explain_function(
-                    english_query=request.english_query,
-                    candidates=[_candidate_payload(candidate)],
-                    retriever=self.evidence_retriever,
-                    generator=self.generator,
-                    config=self.config,
-                )
-            )
+        explanations = self.explain_function(
+            english_query=request.english_query,
+            candidates=[_candidate_payload(candidate) for candidate in request.candidates],
+            retriever=self.evidence_retriever,
+            generator=self.generator,
+            config=self.config,
+        )
         evidence_by_product = {
             explanation.parent_asin: [
                 EvidenceItem(
