@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 from openai import OpenAI
 
+from cartwise.application.service import RecommendationApplicationService
+from cartwise.application.types import ApplicationRecommendationRequest
 from cartwise.core.config import Settings
 from cartwise.evidence.rag import (
     EvidenceRagConfig,
@@ -20,14 +22,12 @@ from cartwise.evidence.rag import (
     QdrantReviewEvidenceRetriever,
 )
 from cartwise.evidence.service import EvidenceService
-from cartwise.evidence.types import EvidenceRequest
-from cartwise.recommendation.types import recommended_candidate_from_mapping
+from cartwise.recommendation.service import RecommendationService
 from cartwise.retrieval.bm25 import BM25Index, BM25Retriever
 from cartwise.retrieval.dense import DenseRetriever
 from cartwise.retrieval.dense import collection_name as dense_collection_name
 from cartwise.retrieval.dense import create_qdrant_client, load_dense_encoder
-from cartwise.retrieval.filters import FilterConstraints
-from cartwise.retrieval.fusion import BM25_CHANNEL, DENSE_CHANNEL, FusionConfig, fuse_candidates
+from cartwise.retrieval.fusion import BM25_CHANNEL, DENSE_CHANNEL, FusionConfig
 from scripts.paths import ARTIFACT_REPORTS_ROOT, PRODUCT_BM25_ARTIFACT_ROOT, PROCESSED_ROOTS
 from scripts.pipeline.build_evidence_index import collection_name as evidence_collection_name
 from scripts.pipeline.build_evidence_index import DEFAULT_REVIEW_EMBEDDING_MODEL
@@ -55,6 +55,15 @@ class RecordingGenerator:
             }
         )
         return self.last_content
+
+
+class _UnusedPersonalization:
+    user_to_index: dict[str, int] = {}
+    item_counts: dict[str, int] = {}
+
+    def recommend(self, user_id: str, *, k: int) -> list[str]:
+        del user_id, k
+        return []
 
 
 def parse_args() -> argparse.Namespace:
@@ -327,54 +336,6 @@ def main() -> None:
         BM25Index.load(PRODUCT_BM25_ARTIFACT_ROOT / args.scope / "bm25.json.gz"),
     )
 
-    dense_candidates = [
-        {
-            "channel": DENSE_CHANNEL,
-            "rank": rank,
-            "parent_asin": result["parent_asin"],
-            "score": result["dense_score"],
-            "score_type": "dense_score",
-            "item": dict(items_by_parent_asin[result["parent_asin"]]),
-            "retrieval_query": result["retrieval_query"],
-            "document": result.get("document"),
-        }
-        for rank, result in enumerate(
-            dense_retriever.search(args.query, k=args.dense_k),
-            start=1,
-        )
-        if result["parent_asin"] in items_by_parent_asin
-    ]
-    bm25_candidates = [
-        {
-            "channel": BM25_CHANNEL,
-            "rank": rank,
-            "parent_asin": result["parent_asin"],
-            "score": result["bm25_score"],
-            "score_type": "bm25_score",
-            "item": dict(items_by_parent_asin[result["parent_asin"]]),
-            "retrieval_query": result["retrieval_query"],
-            "document": result.get("document"),
-        }
-        for rank, result in enumerate(
-            bm25_retriever.search(args.query, k=args.bm25_k),
-            start=1,
-        )
-        if result["parent_asin"] in items_by_parent_asin
-    ]
-    fusion = fuse_candidates(
-        {
-            DENSE_CHANNEL: dense_candidates,
-            BM25_CHANNEL: bm25_candidates,
-        },
-        FilterConstraints(),
-        config=FusionConfig(
-            dense_k=args.dense_k,
-            bm25_k=args.bm25_k,
-            final_top_k=args.top_k,
-        ),
-        known_user=False,
-    )
-
     evidence_retriever = QdrantReviewEvidenceRetriever(
         client,
         collection=evidence_collection_name(args.scope, DEFAULT_REVIEW_EMBEDDING_MODEL),
@@ -406,17 +367,39 @@ def main() -> None:
         generator=generator,
         config=evidence_config,
     )
-    evidence_result = evidence_service.explain(
-        EvidenceRequest(
+    recommendation_service = RecommendationService(
+        intent_parser=None,
+        dense_retriever=dense_retriever,
+        bm25_retriever=bm25_retriever,
+        lightgcn_recommender=_UnusedPersonalization(),
+        popularity_recommender=_UnusedPersonalization(),
+        items_by_parent_asin=items_by_parent_asin,
+        fusion_config=FusionConfig(
+            dense_k=args.dense_k,
+            bm25_k=args.bm25_k,
+            final_top_k=args.top_k,
+        ),
+    )
+    application_service = RecommendationApplicationService(
+        recommendation_service=recommendation_service,
+        evidence_service=evidence_service,
+    )
+    application_result = application_service.recommend(
+        ApplicationRecommendationRequest(
             query=args.query,
-            english_query=args.query,
-            candidates=tuple(
-                recommended_candidate_from_mapping(result)
-                for result in fusion.final_results
-            ),
+            top_k=args.top_k,
+            mode="smoke_search_only",
         )
     )
-    explanations = list(evidence_result.explanations)
+    recommendation_result = application_result.recommendation_result
+    dense_candidates = list(
+        recommendation_result.candidates_by_channel.get(DENSE_CHANNEL, ())
+    )
+    bm25_candidates = list(
+        recommendation_result.candidates_by_channel.get(BM25_CHANNEL, ())
+    )
+    fusion = recommendation_result.fusion_output
+    explanations = list(application_result.evidence_result.explanations)
 
     report = build_report(
         args=args,
