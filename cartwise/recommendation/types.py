@@ -31,6 +31,22 @@ class RecommendedCandidate:
     document: Any = None
 
 
+def recommended_candidate_from_mapping(
+    record: Mapping[str, Any],
+) -> RecommendedCandidate:
+    return RecommendedCandidate(
+        parent_asin=str(record["parent_asin"]),
+        rank=int(record.get("rank", 0)),
+        fusion_score=float(record.get("fusion_score", record.get("score", 0.0))),
+        sources=tuple(record.get("sources", ())),
+        source_ranks=dict(record.get("source_ranks", {})),
+        source_scores=dict(record.get("source_scores", {})),
+        item=dict(record.get("item", {"parent_asin": record["parent_asin"]})),
+        retrieval_query=record.get("retrieval_query"),
+        document=record.get("document"),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RecommendationRequest:
     query: str

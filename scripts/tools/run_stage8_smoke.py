@@ -18,8 +18,10 @@ from cartwise.evidence.rag import (
     EvidenceRagConfig,
     OpenAICompatibleExplanationGenerator,
     QdrantReviewEvidenceRetriever,
-    explain_candidates,
 )
+from cartwise.evidence.service import EvidenceService
+from cartwise.evidence.types import EvidenceRequest
+from cartwise.recommendation.types import recommended_candidate_from_mapping
 from cartwise.retrieval.bm25 import BM25Index, BM25Retriever
 from cartwise.retrieval.dense import DenseRetriever
 from cartwise.retrieval.dense import collection_name as dense_collection_name
@@ -399,17 +401,22 @@ def main() -> None:
         final_review_k=5,
         max_candidate_chunk_k=20,
     )
-    explanations = []
-    for result in fusion.final_results:
-        explanations.extend(
-            explain_candidates(
-                english_query=args.query,
-                candidates=[result],
-                retriever=evidence_retriever,
-                generator=generator,
-                config=evidence_config,
-            )
+    evidence_service = EvidenceService(
+        evidence_retriever=evidence_retriever,
+        generator=generator,
+        config=evidence_config,
+    )
+    evidence_result = evidence_service.explain(
+        EvidenceRequest(
+            query=args.query,
+            english_query=args.query,
+            candidates=tuple(
+                recommended_candidate_from_mapping(result)
+                for result in fusion.final_results
+            ),
         )
+    )
+    explanations = list(evidence_result.explanations)
 
     report = build_report(
         args=args,
