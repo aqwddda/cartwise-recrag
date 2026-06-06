@@ -35,7 +35,7 @@ class FakeApplicationService:
 
 
 def test_health_live_returns_ok() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(initialize_on_startup=False))
 
     response = client.get("/health/live")
 
@@ -54,7 +54,7 @@ def test_health_ready_returns_ready_when_service_is_injected() -> None:
 
 
 def test_health_ready_returns_503_when_service_is_missing() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(initialize_on_startup=False))
 
     response = client.get("/health/ready")
 
@@ -179,7 +179,7 @@ def test_invalid_top_k_returns_validation_error() -> None:
 
 
 def test_recommend_returns_503_when_service_is_missing() -> None:
-    client = TestClient(create_app())
+    client = TestClient(create_app(initialize_on_startup=False))
 
     response = client.post("/api/v1/recommend", json={"query": "guitar tuner"})
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -23,10 +22,14 @@ from qdrant_client.http import models as qdrant_models
 from transformers import AutoTokenizer
 
 from cartwise.core.config import Settings
+from cartwise.evidence.types import (
+    DEFAULT_REVIEW_EMBEDDING_MODEL,
+    evidence_collection_name,
+    evidence_model_slug,
+)
 from scripts.paths import EVIDENCE_DENSE_ARTIFACT_ROOT, PROCESSED_ROOTS
 
 
-DEFAULT_REVIEW_EMBEDDING_MODEL = "intfloat/e5-small-v2"
 DEFAULT_CHUNK_SIZE = 384
 DEFAULT_CHUNK_OVERLAP = 64
 DEFAULT_BATCH_SIZE = 512
@@ -72,6 +75,14 @@ class BuildProgress:
     parent_asin_count: int = 0
 
 
+def model_slug(model_name: str) -> str:
+    return evidence_model_slug(model_name)
+
+
+def collection_name(scope: str, model_name: str) -> str:
+    return evidence_collection_name(scope, model_name)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scope", choices=PROCESSED_ROOTS, default="dev")
@@ -95,17 +106,6 @@ def resolve_device(device: str | torch.device) -> torch.device:
     if resolved.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA device requested, but torch.cuda.is_available() is False")
     return resolved
-
-
-def model_slug(model_name: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", model_name).strip("_").lower()
-    if not slug:
-        raise ValueError("model name must contain at least one alphanumeric character")
-    return slug
-
-
-def collection_name(scope: str, model_name: str) -> str:
-    return f"cartwise_review_evidence_{scope}_{model_slug(model_name)}"
 
 
 def review_point_id(chunk_id: str) -> str:

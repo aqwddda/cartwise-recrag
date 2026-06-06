@@ -99,6 +99,9 @@ tests/test_api.py
 - `cartwise/api/main.py` 已接入 FastAPI lifespan：默认 app 启动时构造真实服务，成功后写入 `app.state`；失败时保留初始化错误并让 `/health/ready` 返回 503，不在请求路径重复初始化。
 - 真实 builder 复用正式 `RecommendationService`、`EvidenceService` 和 `RecommendationApplicationService`，不导入或调用 `Stage8SmokeAdapter`。
 - 新增 `tests/test_api_dependencies.py` 和 `tests/test_api_lifespan.py`，通过 monkeypatch fake 掉重资源，验证 builder 依赖关系、startup success/failure、fake service 注入和请求复用启动期服务。
+- FastAPI builder 默认设备已改为 `cpu`，仍可通过 `ApplicationServiceBuildConfig(device="cuda")` 显式请求 CUDA。
+- Evidence Qdrant collection 命名已合并到轻量公共模块 `cartwise/evidence/types.py`，API builder 与 `scripts/pipeline/build_evidence_index.py` 共用同一命名规则。
+- `cartwise/application/factory.py` 已延迟导入 pyarrow、OpenAI、Qdrant、Dense、BM25、LightGCN、Evidence RAG 等生产依赖；fake-service API 测试不需要触发真实 builder 或加载重资源。
 
 ## 验收命令
 
@@ -121,6 +124,30 @@ tests/test_api.py
 ```
 
 ## 最近成功状态
+
+阶段 9 builder 收尾测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+20 passed
+```
+
+阶段 9 builder 收尾后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+144 passed, 3 warnings
+```
 
 阶段 9 真实 builder 和 lifespan 测试通过：
 
