@@ -22,7 +22,7 @@ from qdrant_client.http import models as qdrant_models
 from transformers import AutoTokenizer
 
 from cartwise.core.config import Settings
-from cartwise.evidence.types import (
+from cartwise.evidence.collections import (
     DEFAULT_REVIEW_EMBEDDING_MODEL,
     evidence_collection_name,
     evidence_model_slug,

@@ -10,9 +10,11 @@ from cartwise.application.factory import (
     DEFAULT_API_DEVICE,
     build_application_service,
     evidence_collection_name,
+    product_collection_name,
 )
 from cartwise.core.config import Settings
-from cartwise.evidence.types import evidence_collection_name as shared_evidence_collection_name
+from cartwise.evidence.collections import evidence_collection_name as shared_evidence_collection_name
+from cartwise.retrieval.collection_names import product_collection_name as shared_product_collection_name
 from tests.test_api import FakeApplicationService
 
 
@@ -210,6 +212,16 @@ def test_evidence_collection_name_reuses_shared_indexing_rule() -> None:
     )
     assert evidence_collection_name("dev", "intfloat/e5-small-v2") == (
         "cartwise_review_evidence_dev_intfloat_e5_small_v2"
+    )
+
+
+def test_product_collection_name_uses_lightweight_naming_rule() -> None:
+    assert product_collection_name("full", "e5") == shared_product_collection_name(
+        "full",
+        "e5",
+    )
+    assert product_collection_name("full", "e5") == (
+        "cartwise_products_full_e5_small_v2"
     )
 
 

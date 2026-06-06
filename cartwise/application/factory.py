@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from cartwise.core.config import Settings
-from cartwise.evidence.types import (
+from cartwise.evidence.collections import (
     DEFAULT_REVIEW_EMBEDDING_MODEL,
     evidence_collection_name,
 )
@@ -149,21 +149,21 @@ def load_items_by_parent_asin(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def create_qdrant_client(qdrant_url: str) -> Any:
-    from cartwise.retrieval.dense import create_qdrant_client as build_client
+    from cartwise.retrieval import dense as dense_runtime
 
-    return build_client(qdrant_url)
+    return dense_runtime.create_qdrant_client(qdrant_url)
 
 
 def product_collection_name(scope: str, model_key: str) -> str:
-    from cartwise.retrieval.dense import collection_name
+    from cartwise.retrieval.collection_names import product_collection_name as collection_name
 
     return collection_name(scope, model_key)
 
 
 def load_dense_encoder(model_key: str, *, device: str) -> Any:
-    from cartwise.retrieval.dense import load_dense_encoder as load_encoder
+    from cartwise.retrieval import dense as dense_runtime
 
-    return load_encoder(model_key, device=device)
+    return dense_runtime.load_dense_encoder(model_key, device=device)
 
 
 def create_query_translator(settings: Settings) -> Any:
@@ -185,9 +185,9 @@ def create_dense_retriever(
     encoder: Any,
     translator: Any,
 ) -> Any:
-    from cartwise.retrieval.dense import DenseRetriever
+    from cartwise.retrieval import dense as dense_runtime
 
-    return DenseRetriever(
+    return dense_runtime.DenseRetriever(
         client,
         collection=collection,
         encoder=encoder,
