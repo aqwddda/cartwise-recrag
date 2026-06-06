@@ -14,19 +14,34 @@
 - 使用 LLM 解析意图，并使用 LangChain 基于已验证事实生成中文解释。
 - 使用 FastAPI 提供接口，使用 Streamlit 提供演示页面。
 
-一期暂时不实现 CrossEncoder、Redis、复杂 Agent 和商品共购图扩展。一期只实现轻量内存会话状态，用于支持 `更便宜`、`换一批` 和排除品牌等演示级多轮需求更新；不实现持久化会话、长期记忆、复杂用户画像更新或多智能体编排。
+一期暂时不实现 CrossEncoder、Redis、复杂 Agent、商品共购图扩展、持久化会话、长期记忆、复杂用户画像更新或多智能体编排。当前下一步先实现单轮 FastAPI 推荐接口，再实现 Streamlit HTTP 客户端和页面。
 
-## 推荐目录结构
+## 当前目录结构
 
 ```text
 cartwise/
+  application/
+    service.py
+    types.py
   api/
     main.py
-    schemas.py
+    README.md
+  catalog/
+    documents.py
   core/
     config.py
-    evidence_rag.py
+    evidence_rag.py   # compatibility wrapper
+    llm.py            # compatibility wrapper
+  evidence/
+    rag.py
+    service.py
+    types.py
+  query/
     llm.py
+    types.py
+  recommendation/
+    service.py
+    types.py
   retrieval/
     popularity.py
     lightgcn.py
@@ -35,7 +50,7 @@ cartwise/
     filters.py
     fusion.py
   ui/
-    app.py
+    README.md
 scripts/
   pipeline/
     download_amazon_reviews.py
@@ -51,6 +66,8 @@ scripts/
     export_items_preview.py
     try_filters.py
     audit_retrieval.py
+    run_stage8_smoke.py
+    stage8_smoke_adapter.py
   experiments/
     download_esci_examples.py
     analyze_esci_overlap.py
@@ -59,6 +76,10 @@ tests/
   test_filters.py
   test_fusion.py
   test_evidence_rag.py
+  test_application_service.py
+  test_recommendation_service.py
+  test_evidence_service.py
+  regression/
   test_api.py
 docs/
   CURRENT_STAGE.md
@@ -66,6 +87,8 @@ docs/
 README.md
 requirements.txt
 ```
+
+当前结构中，脚本不再是唯一业务入口。正式服务入口是 `cartwise.application.RecommendationApplicationService`，未来 FastAPI 应调用该服务。`scripts/tools/stage8_smoke_adapter.py` 仅保留历史 Stage 8 smoke 的 search-only 流程，不属于正式业务服务。
 
 脚本从仓库根目录使用模块方式运行。常用命令示例：
 
@@ -81,6 +104,46 @@ requirements.txt
 
 自动生成且可重复构建的索引报告、分析报告和预览统一写入 `artifacts/`，不提交 Git。
 用于对比历史实验的 CSV 指标保留在 `reports/metrics/` 并提交 Git。
+
+## 阶段 0 到阶段 7：结构重构结果
+
+结构重构已经完成并通过完整测试。当前结果如下：
+
+- 阶段 0：新增 legacy regression harness 和确定性 fixture，基于旧链路冻结推荐和 Evidence 行为；fixture 位于 `tests/fixtures/regression/`，测试位于 `tests/regression/`。
+- 阶段 1：建立 `cartwise.paths` 和必要包边界，`scripts.paths` 作为兼容 re-export 保留。
+- 阶段 2：将共享商品文档构造迁移到 `cartwise.catalog.documents`，BM25 和 Dense 复用同一路径。
+- 阶段 3A：将 `FilterConstraints` 等 query 类型迁移到 `cartwise.query.types`，过滤执行逻辑仍在 `cartwise.retrieval.filters`。
+- 阶段 3B：将 query 翻译和意图解析迁移到 `cartwise.query.llm`，`cartwise.core.llm` 作为兼容 wrapper 保留。
+- 阶段 4：提取 `cartwise.recommendation.RecommendationService`，正式推荐链路在服务层编排，审计脚本通过服务调用。
+- 阶段 5A：将 Evidence RAG 实现迁移到 `cartwise.evidence.rag`，`cartwise.core.evidence_rag` 作为兼容 wrapper 保留。
+- 阶段 5B：提取 `cartwise.evidence.EvidenceService`，它只对最终候选商品检索评论证据和生成解释，不执行商品召回。
+- 阶段 6：提取 `cartwise.application.RecommendationApplicationService`，作为未来 FastAPI 的主业务入口。
+- 阶段 7：补充 API/UI 边界说明，不实现真实 FastAPI 或 Streamlit 功能。
+
+结构重构收尾已经进一步修复：
+
+- 正式 `RecommendationRequest` 和 `ApplicationRecommendationRequest` 不再接收 `mode` 或 `smoke_search_only`。
+- `RecommendationService` 和 `RecommendationApplicationService` 不包含 smoke-only 分支，每次调用都代表正式推荐链路。
+- 历史 Stage 8 smoke search-only 流程迁移到 `scripts.tools.stage8_smoke_adapter.Stage8SmokeAdapter`。
+- `EvidenceService` 保持多候选批量解释调用，只调用一次 `explain_candidates`。
+- `cartwise.retrieval.filters` 的默认映射文件路径复用 `cartwise.paths.PROCESSED_ROOT`。
+
+验证状态：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+# 124 passed, 3 warnings
+
+.\.venv\Scripts\python.exe -m pytest tests/regression/test_legacy_regression.py
+# 2 passed, 3 warnings
+```
+
+下一步开发顺序：
+
+1. 阶段 9：先完成 FastAPI schema、依赖注入和接口测试，再接真实 Application Service。
+2. 阶段 10：实现 Streamlit HTTP 客户端和页面。Streamlit 只能通过 HTTP 调用 FastAPI。
+3. 阶段 11：端到端联调、正式评估、延迟记录和 README 精简。
+4. MVP 后：统一迁移旧 wrapper 调用方，删除兼容 wrapper，考虑将 `core/config.py` 迁移到顶层。
 
 ## 阶段 1：最小 API
 
@@ -796,11 +859,24 @@ tests/test_api.py
 ### 接口
 
 ```text
-GET  /health
+GET  /health/live
+GET  /health/ready
 POST /api/v1/recommend
 ```
 
-先使用假数据验证接口，再接入真实推荐链路。阶段 9 只实现单轮推荐请求，不维护会话状态。
+可保留现有 `/health` 作为兼容 liveness 入口。先使用 fake Application Service 验证接口 schema、依赖注入、错误处理和响应结构，再接入真实 Application Service。阶段 9 只实现单轮推荐请求，不维护会话状态。
+
+FastAPI 路由只允许调用 `cartwise.application.RecommendationApplicationService` 或测试注入的等价 fake，不得直接拼装 Dense、BM25、Popularity、LightGCN、Fusion、Qdrant 或 LLM。重资源初始化必须由 lifespan、composition root 或显式依赖注入一次性完成，不得在每次请求中重新加载。
+
+请求 schema 只暴露当前后端已有能力：
+
+```text
+query: str
+user_id: str | None
+top_k: int | None
+```
+
+不得暴露 `mode`、`smoke_search_only`、debug 开关、召回通道开关、Fusion 权重或内部算法参数。响应 schema 从 Application Service 结果裁剪转换得到，不得原样返回完整内部 `ApplicationRecommendationResult`。
 
 ### 验收
 
@@ -808,6 +884,8 @@ POST /api/v1/recommend
 - 可以返回 Top 5 商品、召回来源、评论证据和中文解释。
 - 请求中的价格、品牌和属性约束通过后端链路执行。
 - LLM 不可用时仍然返回合法结果和模板解释。
+- `/health/live` 不依赖重资源。
+- `/health/ready` 可以诊断 Qdrant、模型、索引、LLM 配置和服务实例是否可用。
 
 ### 提交
 
@@ -832,7 +910,7 @@ cartwise/ui/app.py
 
 ### 原则
 
-Streamlit 只通过 HTTP 调用 FastAPI。推荐逻辑、过滤器、Qdrant 和 LLM 调用全部放在后端。
+Streamlit 只通过 HTTP 调用 FastAPI。推荐逻辑、过滤器、Qdrant 和 LLM 调用全部放在后端。Streamlit 不得导入 `cartwise.retrieval`、`cartwise.recommendation`、`cartwise.evidence`、模型对象、Qdrant client 或 LLM client。
 
 ### 页面功能
 
@@ -842,6 +920,7 @@ Streamlit 只通过 HTTP 调用 FastAPI。推荐逻辑、过滤器、Qdrant 和 
 - Top 5 商品卡片。
 - 推荐理由和潜在缺点。
 - 评论证据和召回来源。
+- 单轮推荐展示。`换一批`、`更便宜`、`排除该品牌` 等多轮操作留到 MVP 后，除非 FastAPI 阶段已经明确实现对应后端接口。
 - 请求耗时展示。
 
 ### 启动
@@ -897,6 +976,13 @@ git commit -m "feat: add streamlit demo"
 - 示例请求。
 - 已知限制。
 - 演示流程。
+
+MVP 跑通 API 与 UI 之后，再规划 wrapper 清理：
+
+- 迁移旧测试和 legacy harness 中的 `cartwise.core.llm`、`cartwise.core.evidence_rag` 调用。
+- 删除或降级兼容 wrapper。
+- 评估是否将 `cartwise/core/config.py` 迁移为 `cartwise/config.py`。
+- 精简 README 和历史开发说明。
 
 ### 最终走查
 

@@ -4,7 +4,7 @@
 
 CartWise 是一个基于 RAG 的可解释个性化电商导购系统，用于展示推荐系统、检索增强生成和在线服务化能力。
 
-项目使用 Amazon Reviews 2023 的 `Musical_Instruments` 单品类数据。系统结合用户历史行为、当前自然语言需求、结构化约束和真实评论证据，返回带引用的 Top 5 商品推荐，并支持简单的多轮需求更新。
+项目使用 Amazon Reviews 2023 的 `Musical_Instruments` 单品类数据。系统结合用户历史行为、当前自然语言需求、结构化约束和真实评论证据，返回带引用的 Top 5 商品推荐。当前 MVP 已完成推荐与 Evidence 服务层重构，下一步进入 FastAPI 与 Streamlit 接入。
 
 项目不是让 LLM 自由生成商品，而是让不同组件承担明确职责：
 
@@ -24,11 +24,21 @@ CartWise 是一个基于 RAG 的可解释个性化电商导购系统，用于展
 - 实现价格、品牌、属性等硬过滤。
 - 建立独立的评论证据索引。
 - 接入 OpenAI-compatible LLM 适配层。
-- 使用 FastAPI 提供接口，使用 Streamlit 提供中文演示页。
-- 支持基于 FastAPI 进程内存的轻量多轮需求更新，例如 `更便宜`、`换一批` 和排除指定品牌。
+- 使用 FastAPI 提供单轮推荐接口，使用 Streamlit 提供中文演示页。
 - 输出离线指标、引用准确性抽检结果和本机延迟报告。
 
-一期不实现复杂 Agent、CrossEncoder、Redis 持久化会话存储和独立商品图模型。多轮交互仅采用进程内存保存 `session_id`、当前约束和已展示商品，服务重启后会话丢失属于一期可接受限制。
+一期当前不实现复杂 Agent、CrossEncoder、Redis、多轮会话、持久化会话存储、登录、数据库、复杂监控、高级前端功能和独立商品图模型。多轮需求更新、部署和复杂会话能力属于 MVP 后可选项。
+
+## 2.1 当前 MVP 路线
+
+结构重构已经完成，当前主要任务不再是重新调整目录，而是接入 API 与 UI：
+
+1. FastAPI：实现 `/health/live`、`/health/ready` 和 `POST /api/v1/recommend`，通过 Application Service 调用正式推荐链路。
+2. Streamlit：只通过 HTTP 调用 FastAPI，展示单轮推荐、证据和解释。
+3. 端到端联调：验证中文 query、约束执行、Top 5、Evidence、LLM fallback 和 readiness。
+4. 最终清理：在 API 与 UI 稳定后迁移旧 wrapper 调用方、精简 README、补充最终运行说明。
+
+MVP 后可选项包括 Redis、多轮会话、复杂 Agent、CrossEncoder、共购图扩展、部署、登录、数据库和更复杂监控。
 
 ## 3. 数据集评估
 
@@ -71,19 +81,16 @@ CartWise 是一个基于 RAG 的可解释个性化电商导购系统，用于展
 
 ```mermaid
 flowchart TD
-    A["用户中文需求"] --> B["LLM 或规则解析器：结构化意图"]
-    B --> C["LightGCN：个性化候选"]
-    B --> D["Dense：语义候选"]
-    B --> E["BM25：关键词候选"]
-    C --> F["候选融合与去重"]
-    D --> F
-    E --> F
-    F --> G["代码层硬过滤"]
-    G --> H["Top 5 商品"]
-    H --> I["评论索引：检索真实证据"]
-    I --> J["LLM：基于商品和证据生成解释"]
-    J --> K["引用校验与模板回退"]
-    K --> L["返回推荐结果"]
+    A["FastAPI 或脚本入口"] --> B["Application Service"]
+    B --> C["RecommendationService"]
+    C --> D["Query 翻译与意图解析"]
+    D --> E["Dense / BM25 / Popularity / LightGCN"]
+    E --> F["过滤与 weighted RRF Fusion"]
+    F --> G["最终候选商品"]
+    G --> H["EvidenceService"]
+    H --> I["评论证据 RAG"]
+    I --> J["LLM 解释、引用校验与模板回退"]
+    J --> K["结构化推荐响应"]
 ```
 
 ### 4.1 各组件职责
@@ -97,6 +104,11 @@ flowchart TD
 | 硬过滤器 | 确保价格、品牌和属性约束不会被排序模型绕过 |
 | 评论证据 RAG | 为推荐理由和潜在缺点提供可追溯依据 |
 | LLM 适配层 | 解析需求并将已验证事实组织为自然语言 |
+| RecommendationService | 编排正式推荐链路，不加载重资源 |
+| EvidenceService | 基于最终候选批量检索证据和生成解释 |
+| Application Service | 串联推荐与证据服务，是未来 FastAPI 的业务入口 |
+
+历史 `scripts/tools/run_stage8_smoke.py` 通过 `scripts/tools/stage8_smoke_adapter.py` 保留 Stage 8 search-only smoke 行为。该 adapter 不属于正式业务服务，FastAPI 不得调用。
 
 ### 4.2 候选融合
 
@@ -240,7 +252,9 @@ score(item) = 训练集中与商品相关的交互次数
 
 ## 7. 多轮交互
 
-一期只实现轻量多轮交互，不实现 Redis、长期记忆、复杂用户画像更新或多智能体会话编排。会话状态存储在 FastAPI 进程内存中，以 `session_id` 标识。服务重启后会话丢失属于一期可接受限制。
+当前 MVP 先实现单轮推荐。多轮交互、Redis、长期记忆、复杂用户画像更新和多智能体会话编排全部放到 MVP 后。不要在 FastAPI 阶段提前引入 `session_id`、会话存储或反馈接口，除非用户明确调整当前阶段范围。
+
+MVP 后可以考虑的操作：
 
 | 操作 | 行为 |
 |---|---|
@@ -297,16 +311,14 @@ score(item) = 训练集中与商品相关的交互次数
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
-| `GET` | `/health` | 检查 API、Qdrant 和模型状态 |
-| `POST` | `/api/v1/sessions` | 创建会话，可传入演示用户 ID |
-| `POST` | `/api/v1/sessions/{session_id}/recommend` | 提交自然语言需求，返回 Top 5 推荐 |
-| `POST` | `/api/v1/sessions/{session_id}/feedback` | 执行换一批、更便宜、排除品牌 |
+| `GET` | `/health/live` | liveness，只表示进程存活 |
+| `GET` | `/health/ready` | readiness，检查 Qdrant、模型、索引、LLM 配置和服务实例 |
+| `POST` | `/api/v1/recommend` | 单轮自然语言需求，返回 Top K 推荐 |
 
 推荐响应至少包含：
 
 ```json
 {
-  "session_id": "...",
   "applied_constraints": {},
   "recommendations": [
     {
@@ -329,6 +341,8 @@ score(item) = 训练集中与商品相关的交互次数
 }
 ```
 
+FastAPI 请求 schema 只暴露 `query`、可选 `user_id` 和 `top_k` 等当前后端已有能力，不暴露 smoke、debug、mode 或内部算法参数。路由层不得直接调用 Dense、BM25、LightGCN、Popularity、Fusion、Qdrant 或 LLM，必须通过 Application Service。
+
 ### 9.2 Streamlit
 
 页面使用中文，商品标题与评论摘录保留英文原文：
@@ -338,7 +352,7 @@ score(item) = 训练集中与商品相关的交互次数
 - 当前约束展示。
 - Top 5 商品卡片。
 - 推荐理由、潜在缺点、评论证据和召回来源。
-- `换一批`、`更便宜`、`排除该品牌` 快捷操作。
+- 单轮推荐结果展示。`换一批`、`更便宜`、`排除该品牌` 等快捷操作属于 MVP 后，除非后端已实现对应接口。
 - 简单耗时展示。
 
 默认不主动打开网页预览，仅在最终 UI 验收或排查交互问题时使用浏览器。
@@ -347,9 +361,14 @@ score(item) = 训练集中与商品相关的交互次数
 
 ```text
 cartwise/
+  application/      # 顶层业务编排，FastAPI 应调用这里
   api/              # FastAPI 路由和请求响应模型
-  core/             # 配置、推荐编排、会话状态、LLM 适配层
-  retrieval/        # LightGCN、Popularity、Dense、BM25、证据检索
+  catalog/          # 商品文档构造等 catalog 共享逻辑
+  core/             # 当前保留配置和兼容 wrapper
+  evidence/         # 评论证据 RAG 与 EvidenceService
+  query/            # Query 翻译、意图解析和约束类型
+  recommendation/   # RecommendationService
+  retrieval/        # LightGCN、Popularity、Dense、BM25、过滤、Fusion
   ui/               # Streamlit
 scripts/
   pipeline/         # 可重复执行的下载、清洗、建索引、训练、评估流程
@@ -383,20 +402,14 @@ HTML 导出评分 CSV。
 
 原始数据、处理后数据、模型权重、向量索引和真实密钥不得提交 Git。
 
-## 11. 十个工作日安排
+## 11. 后续阶段安排
 
-| 日期 | 工作内容 | 当日验收 |
+| 阶段 | 工作内容 | 验收 |
 |---|---|---|
-| Day 1 | 处理 Git safe-directory 警告；安装 Docker Desktop；启动 Qdrant；验证 Python 3.12、PyG LightGCN 和 LLM 接口 | `/health` 可检查 Qdrant；PyG LightGCN GPU 冒烟成功 |
-| Day 2 | 编写下载与预处理脚本；生成小样本和完整 5-core 处理产物；关联元数据和评论 | 输出数据质量报告，包含缺失字段和过滤比例 |
-| Day 3 | 实现 Popularity；训练 LightGCN；运行小样本离线评估 | 输出 Recall@10、NDCG@10、HitRate@10 基线 CSV |
-| Day 4 | 构建商品文档；对比 E5 与 BLaIR；建立独立 Qdrant 商品索引和 BM25 索引；增加最小中文翻译层 | 英文人工查询对比完成；中文查询可翻译后进入英文检索链路 |
-| Day 5 | 实现候选融合、硬过滤和冷启动 fallback | 已知用户和冷启动用户均能返回符合约束的 Top 5 |
-| Day 6 | 构建评论证据索引；实现按商品过滤的证据检索；生成稳定引用 ID | 每个推荐商品返回最多 3 条真实评论引用 |
-| Day 7 | 接入 LLM 意图解析和解释生成；实现 JSON 校验与模板回退 | LLM 不可用或输出异常时仍可返回合法结果 |
-| Day 8 | 实现内存会话、FastAPI 路由和 Streamlit 页面 | 演示首次推荐、换一批、更便宜和排除品牌 |
-| Day 9 | 在完整 5-core 上训练和评估；记录消融；测量本机延迟 | 输出正式 CSV 和 Markdown 实验表 |
-| Day 10 | 补测试、README、启动步骤、演示脚本和已知限制；完整走查 | 新环境按 README 可运行本机 Demo |
+| FastAPI | 实现 schema、依赖注入、`/health/live`、`/health/ready`、`POST /api/v1/recommend`，接入 Application Service | API 测试覆盖正常请求、非法输入、fallback 和 readiness |
+| Streamlit | 实现只通过 HTTP 调用 FastAPI 的中文演示页 | 可展示 Top K、约束、来源、证据和解释 |
+| 端到端联调 | 使用真实模型、索引、Qdrant 和 LLM 跑通 API + UI | 中文 query、约束、证据和 fallback 均可验证 |
+| 最终清理 | 整理 README、迁移 wrapper 调用方、补充最终报告和限制说明 | 新对话可根据 README 和文档继续开发 |
 
 ## 12. 验收标准
 
@@ -404,9 +417,9 @@ HTML 导出评分 CSV。
 
 1. 已知用户：`推荐 50 美元以内、适合初学者的吉他调音器，不要 Fender。`
 2. 冷启动用户：`推荐适合家庭录音的便携麦克风支架。`
-3. 多轮操作：首次推荐后依次执行 `更便宜`、`换一批`、排除某个商品品牌。
-4. 无结果场景：约束过严时返回明确提示，不返回违反约束的商品。
-5. LLM 故障场景：超时、无效 JSON 和伪造引用均触发回退。
+3. 无结果场景：约束过严时返回明确提示，不返回违反约束的商品。
+4. LLM 故障场景：超时、无效 JSON 和伪造引用均触发回退。
+5. API readiness：重资源未准备好时能返回可诊断状态。
 
 ### 12.2 自动化测试
 
@@ -414,7 +427,7 @@ HTML 导出评分 CSV。
 - 过滤器：价格边界、品牌排除、已展示商品排除。
 - 融合排序：候选来源为空、重复商品、冷启动。
 - 证据引用：引用属于对应商品，并且来自检索结果。
-- API：正常请求、非法 session、LLM fallback、Qdrant 不可用。
+- API：正常请求、非法输入、LLM fallback、Qdrant 或重资源不可用。
 - 冒烟测试：使用小样本完成建索引、启动 API 和请求 Top 5。
 
 ### 12.3 实验报告
@@ -466,7 +479,7 @@ HTML 导出评分 CSV。
 
 一期完成后，简历描述中的指标必须使用真实实验结果：
 
-> 基于 Amazon Reviews 2023 乐器类 5-core 数据构建个性化导购系统，在约 51 万条交互上训练 LightGCN；融合 Dense/BM25 混合召回、结构化硬过滤和评论证据 RAG，实现中文多轮需求更新与可追溯推荐解释。相较 Popularity 基线，Recall@10 提升 `X%`；评论引用一致性达到 `Y%`；本地检索链路 P95 延迟为 `Z ms`。
+> 基于 Amazon Reviews 2023 乐器类 5-core 数据构建个性化导购系统，在约 51 万条交互上训练 LightGCN；融合 Dense/BM25 混合召回、结构化硬过滤和评论证据 RAG，实现中文自然语言导购与可追溯推荐解释。相较 Popularity 基线，Recall@10 提升 `X%`；评论引用一致性达到 `Y%`；本地检索链路 P95 延迟为 `Z ms`。
 
 ## 15. 风险与约束
 

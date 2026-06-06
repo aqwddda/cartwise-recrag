@@ -1,20 +1,48 @@
 # CartWise 当前阶段
 
-本文档是 Agent/Codex 执行任务前的第一入口。当前阶段的具体实现规则以本文档为准；`docs/DEVELOPMENT_STEPS.md` 只作为历史阶段索引和粗粒度阶段说明参考。全局架构见 `docs/PROJECT_PLAN.md`，关键决策见 `docs/DECISIONS.md`。
+本文档是 Agent/Codex 执行任务前的第一入口。当前阶段的具体实现规则以本文档为准；`docs/DEVELOPMENT_STEPS.md` 记录历史阶段和下一步开发顺序，`docs/PROJECT_PLAN.md` 记录 MVP 路线，关键架构决策见 `docs/DECISIONS.md`。
 
 ## 上一阶段摘要
 
-阶段 8 已完成：已实现独立评论证据 Dense 索引脚本、候选商品范围内的评论证据 RAG、结构化中文解释生成、引用校验、模板回退和只读真实链路 smoke 报告；当前 Qdrant 仍按用户要求只读，未执行 collection 重建。
+阶段 0 到阶段 7 的结构重构和收尾已完成。当前源码已经建立 Query、Catalog、Retrieval、Recommendation、Evidence 和 Application 的分层结构：
+
+- `cartwise.query`：查询翻译、意图解析和查询约束类型。
+- `cartwise.catalog`：商品文档构造等 catalog 共享逻辑。
+- `cartwise.retrieval`：BM25、Dense、Popularity、LightGCN、过滤和 Fusion。
+- `cartwise.recommendation`：正式推荐链路服务，编排意图解析、约束生成、四路召回、过滤和 Fusion。
+- `cartwise.evidence`：评论证据 RAG、EvidenceService 和证据类型。
+- `cartwise.application`：未来 API 应调用的最上层业务入口，串联 RecommendationService 与 EvidenceService。
+
+历史 Stage 8 smoke 的 search-only 行为已经迁移到脚本侧 `scripts/tools/stage8_smoke_adapter.py`。该 adapter 不属于正式业务服务，未来 FastAPI 不得调用它。
 
 ## 当前阶段
 
-当前阶段：阶段 9：完整 API。
+当前阶段：阶段 9：FastAPI 接入。
 
-阶段 9 只实现 FastAPI 单轮推荐接口，把现有阶段 7 fusion 链路和阶段 8 评论证据解释链路封装成后端 API。不要提前实现阶段 10 Streamlit、多轮会话、Redis、复杂 Agent、CrossEncoder、评论 BM25 或二期图扩展。
+阶段 9 的目标是实现正常项目级别的 FastAPI 单轮推荐接口，把已经提取出的 Application Service 接到 HTTP 层。不要把本阶段做成临时 demo，也不要扩展新的推荐算法、召回通道、多轮会话、Streamlit 页面、Redis、Agent、CrossEncoder 或部署能力。
 
-## 当前目标
+## 当前真实边界
 
-完成阶段 9 的三个模块：
+- `RecommendationService` 负责正式推荐链路：原始 query -> query 翻译/意图解析 -> `FilterConstraints` -> Dense/BM25/Popularity/LightGCN 召回 -> 过滤与 Fusion。
+- `EvidenceService` 只基于最终候选商品执行评论证据检索和解释生成；它保持多候选批量调用语义，不逐商品触发多次解释调用。
+- `RecommendationApplicationService` 是未来 FastAPI 的主要业务入口，负责顺序调用 RecommendationService 和 EvidenceService，并组织结构化应用结果。
+- `cartwise/core/llm.py` 和 `cartwise/core/evidence_rag.py` 当前只是兼容 wrapper。新业务代码不得继续从这两个路径导入。
+- `cartwise/core/config.py` 仍是有效配置模块，不属于废弃文件。
+- 正式服务契约中不得重新引入 `smoke_search_only`、`mode` 或其他历史 smoke 分支。
+
+## 阶段 9 目标
+
+优先实现以下接口：
+
+```text
+GET  /health/live
+GET  /health/ready
+POST /api/v1/recommend
+```
+
+可保留现有 `/health` 作为兼容 liveness 入口，但 readiness 必须独立表达重资源是否已经准备好。
+
+阶段 9 应新增或完善：
 
 ```text
 cartwise/api/schemas.py
@@ -22,75 +50,40 @@ cartwise/api/main.py
 tests/test_api.py
 ```
 
-- `cartwise/api/schemas.py`：定义健康检查、推荐请求和推荐响应的 Pydantic schema。
-- `cartwise/api/main.py`：提供 FastAPI app、`GET /health` 和 `POST /api/v1/recommend`。
-- `tests/test_api.py`：覆盖健康检查、正常推荐请求、非法输入、LLM fallback 和 Qdrant 不可用等 API 行为。
+实现顺序：
 
-## 阶段 9 详细规则
+1. 定义 FastAPI schema，先用 fake Application Service 覆盖 HTTP 行为和错误处理。
+2. 设计依赖注入和 composition root，使重资源在启动生命周期或显式构造阶段一次性初始化。
+3. 接入真实 `RecommendationApplicationService`，路由层只调用 Application Service。
+4. 覆盖正常请求、非法输入、LLM fallback、Qdrant 或重资源不可用、readiness 状态等测试。
 
-### 接口范围
+## API 设计规则
 
-- 阶段 9 只提供单轮推荐请求，不维护会话状态。
-- 本阶段接口为：
+- 请求 schema 只暴露当前后端已有能力，例如 `query`、可选 `user_id`、`top_k`。
+- 请求 schema 不得暴露 `smoke`、`debug`、`mode`、Fusion 内部权重、召回通道开关或其他内部算法模式。
+- 响应 schema 应从 Application Service 结果转换得到，不得直接原样返回完整 `ApplicationRecommendationResult`。
+- 响应应避免暴露完整中间对象、完整候选池、大型 evidence payload 或内部诊断结构。
+- FastAPI 路由不得直接调用 Dense、BM25、LightGCN、Popularity、Fusion、Qdrant 或 LLM。
+- FastAPI lifespan 或独立 composition root 负责一次性初始化 Dense 模型、BM25 索引、Popularity、LightGCN、Qdrant client、LLM client、RecommendationService、EvidenceService 和 Application Service。
+- `/health/live` 只表达进程存活。
+- `/health/ready` 表达 Qdrant、模型、索引、LLM 配置和服务实例是否可用；不可用时应返回可诊断状态，不应让健康检查崩溃。
 
-```text
-GET  /health
-POST /api/v1/recommend
-```
+## 禁止事项
 
-- 先使用可控假数据或可注入依赖验证接口 schema、错误处理和响应结构，再接入真实推荐链路。
-- 不新增阶段 9 之外的前端页面或多轮反馈接口。
-
-### 推荐链路
-
-- 中文推荐请求必须先经过既有最小 LLM 翻译层转成英文 query，再进入 Dense/BM25 检索链路；翻译失败时明确报错，不把中文原文静默传给英文检索模型。
-- 英文 query 直接进入 Dense/BM25，不调用翻译。
-- 商品召回、硬过滤、候选融合继续复用阶段 7 已有模块。
-- 评论证据和中文解释继续复用阶段 8 `cartwise/core/evidence_rag.py`。
-- 评论 RAG 只能基于 fusion 后的最终候选商品检索证据，不能引入新的商品候选。
-- Qdrant 当前只能读取，不得在 API 启动或请求处理中重建、覆盖或修改 collection。
-
-### 响应要求
-
-推荐响应至少能表达：
-
-- `parent_asin`
-- 商品标题、品牌、价格
-- 融合分数或排序分数
-- 召回来源，例如 `dense`、`bm25`
-- 中文推荐理由
-- 中文潜在缺点
-- 引用评论证据，包括 `review_id`、`rating` 和评论摘录
-- 当前请求应用到的结构化约束
-
-当过滤后不足 5 个商品时，返回实际数量，不返回违反硬约束的商品。
-
-### 异常与回退
-
-- `/health` 不应因 Qdrant 或 LLM 不可用而崩溃；依赖不可用时返回 HTTP `200`，并在状态字段中标记为 `unavailable`。
-- 推荐请求参数非法时返回明确的 4xx 响应。
-- LLM 解释不可用、输出非法或引用非法时，必须返回阶段 8 的确定性模板解释。
-- Qdrant 不可用时，推荐接口应返回可诊断错误或受控 fallback，不能抛出未处理异常。
-
-### 验收标准
-
-- 可以提交中文推荐请求。
-- 可以返回 Top 5 商品、召回来源、评论证据和中文解释。
-- 请求中的价格、品牌和属性约束通过后端链路执行。
-- LLM 不可用时仍然返回合法结果和模板解释。
-- `/health` 能报告 API、Qdrant、推荐模型和 LLM 状态。
-- API 测试覆盖正常请求、非法请求、LLM fallback 和 Qdrant 不可用。
-
-## 当前卡点
-
-无新的阶段 9 卡点。开始编码前需要先读取现有配置、LLM 翻译层、阶段 7 fusion 模块和阶段 8 evidence RAG 模块，确定 API 依赖注入方式。
+- 不实现 Streamlit 页面。
+- 不启动 Web 服务作为本阶段文档更新的一部分。
+- 不删除 `cartwise/core/llm.py`、`cartwise/core/evidence_rag.py` 或 `cartwise/core/config.py`。
+- 不修改阶段 0 冻结 fixture 来掩盖行为变化。
+- 不重建 Qdrant collection、模型、索引或数据。
+- 不升级依赖。
+- 不把 Stage8SmokeAdapter 接入 FastAPI 或 Application Service。
 
 ## 下一步任务
 
-1. 阅读 `cartwise/core/config.py`、阶段 7 召回/融合模块、阶段 8 `cartwise/core/evidence_rag.py` 和现有测试风格。
-2. 新建 API schema 和 FastAPI app，先用测试注入的假推荐服务跑通接口。
-3. 接入真实单轮推荐链路，并保持 Qdrant 只读。
-4. 增加 `tests/test_api.py` 覆盖阶段 9 验收场景。
+1. 阅读 `cartwise/api/README.md`、`cartwise/application/service.py`、`cartwise/application/types.py`、`cartwise/recommendation/service.py`、`cartwise/evidence/service.py` 和 `cartwise/core/config.py`。
+2. 新增 `cartwise/api/schemas.py` 并更新 `cartwise/api/main.py`，先使用 fake Application Service 写 API 测试。
+3. 设计真实资源 composition root，但保持 API 路由只依赖 Application Service。
+4. 接入真实 Application Service 后运行 API 测试、服务层相关测试和阶段 0 回归测试。
 
 ## 验收命令
 
@@ -100,21 +93,45 @@ POST /api/v1/recommend
 .\.venv\Scripts\python.exe -m pytest tests/test_api.py
 ```
 
-阶段 9 完成前应同时回归阶段 7/8 关键测试：
+阶段 9 完成前应同时回归服务层和阶段 0 基线：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_fusion.py tests/test_evidence_rag.py tests/test_api.py
+.\.venv\Scripts\python.exe -m pytest tests/test_application_service.py tests/test_recommendation_service.py tests/test_evidence_service.py tests/regression/test_legacy_regression.py tests/test_api.py
+```
+
+如修改了推荐、Evidence 或 Application 服务边界，应运行完整测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ## 最近成功状态
 
-阶段 8 验收命令已通过：
+结构重构收尾后完整测试通过：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_build_evidence_index.py tests/test_evidence_rag.py tests/test_fusion.py
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-阶段 8 最近成功 smoke：
+结果：
+
+```text
+124 passed, 3 warnings
+```
+
+阶段 0 确定性回归通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/regression/test_legacy_regression.py
+```
+
+结果：
+
+```text
+2 passed, 3 warnings
+```
+
+最近成功 Stage 8 smoke：
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.tools.run_stage8_smoke --scope full --query "guitar tuner for beginners" --top-k 5 --dense-k 10 --bm25-k 10 --device cuda
@@ -123,17 +140,6 @@ POST /api/v1/recommend
 最近成功报告：
 
 ```text
-artifacts/reports/stage8_smoke/20260605_214621_guitar_tuner_for_beginners.json
-artifacts/reports/stage8_smoke/20260605_214621_guitar_tuner_for_beginners.txt
+artifacts/reports/stage8_smoke/20260606_001528_guitar_tuner_for_beginners.json
+artifacts/reports/stage8_smoke/20260606_001528_guitar_tuner_for_beginners.txt
 ```
-
-## 提交说明
-
-阶段 9 完成后建议提交：
-
-```powershell
-git add .
-git commit -m "feat: add recommendation api"
-```
-
-提交前必须重新检查 `git status`，不要提交 `.env`、数据文件、索引文件、模型权重、缓存文件或真实 API Key。
