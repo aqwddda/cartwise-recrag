@@ -32,13 +32,119 @@
 
 ## 阶段 10 目标
 
-实现 Streamlit 演示入口：
+实现面向用户的 Streamlit 单轮推荐演示页，而不是后端调试面板。Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、recommendation、evidence、模型对象、Qdrant client、LLM client、RecommendationService、EvidenceService 或 RecommendationApplicationService。页面只实现单轮推荐展示，不做登录、数据库、Redis、多轮会话、Agent、部署能力或复杂前端功能。
+
+本阶段建议新增或修改文件限定为：
 
 ```text
 cartwise/ui/app.py
+cartwise/ui/api_client.py
+cartwise/ui/README.md
+tests/test_ui_api_client.py
 ```
 
-Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、recommendation、evidence、模型对象、Qdrant client 或 LLM client。页面只实现单轮推荐展示，不做登录、数据库、Redis、多轮会话、Agent、部署能力或复杂前端功能。
+如果已有 Streamlit 入口文件，应优先复用，不要创建重复入口。不要修改 FastAPI 文件。若发现现有 API 字段无法支撑页面展示，应先停止并汇报，不要擅自改后端。
+
+Streamlit 前端只能调用：
+
+```text
+GET /health/ready
+POST /api/v1/recommend
+```
+
+默认后端地址使用：
+
+```text
+http://127.0.0.1:8000
+```
+
+同时必须支持通过环境变量 `CARTWISE_API_BASE_URL` 或 Streamlit sidebar 配置覆盖。
+
+## 阶段 10 UI 要求
+
+页面应像一个“智能乐器购物推荐助手”，而不是 API response viewer。首屏应包含清晰标题、简短说明、搜索输入区和推荐按钮。页面文案可以使用英文界面，保持专业、简洁。
+
+顶部区域显示：
+
+```text
+CartWise
+AI-powered music gear recommendations from product data and reviews
+```
+
+搜索区域放在页面上方，包含较大的 query 输入框。输入框 placeholder：
+
+```text
+Describe what you need, e.g. “a quiet guitar practice setup for my apartment”
+```
+
+`top_k` 数字输入默认 5，范围 1 到 50。`user_id` 放在 sidebar 的 Advanced options 中，不要放在主搜索区干扰普通用户。后端 API 地址也放在 sidebar 中。sidebar 同时显示 backend readiness 状态。
+
+后端 readiness 展示应用户友好。如果 `/health/ready` 是 ready，显示 “Backend ready”。如果后端未启动、连接失败或 ready 返回 503，显示清晰提示：
+
+```text
+Backend is not ready. Start FastAPI with:
+uvicorn cartwise.api.main:app --reload
+```
+
+并将后端返回的 `initialization_error` 放在展开区域中。页面不得因 readiness 失败崩溃。
+
+点击推荐按钮后显示 spinner：
+
+```text
+Finding products and reading review evidence...
+```
+
+请求成功后，页面顶部显示简洁摘要：
+
+```text
+Found 5 recommendations in 32.1s
+```
+
+如果 `search_query` 与用户原始 query 不同，可以在小字中显示 “Search query used: ...”，但不要让它抢占主视觉。
+
+推荐结果卡片应突出商品标题、品牌、价格、排名、推荐理由、潜在不足和评论证据摘要。不要把后端字段原样堆出来。`search_query`、`applied_constraints`、`source_scores`、`raw response` 这类调试信息应放在可展开区域中，而不是默认展示在主页面。
+
+每个商品主卡片默认展示：
+
+```text
+rank
+title
+brand
+price
+reason
+potential_cons
+```
+
+对于价格为空，显示 `Price unavailable`，不要显示 `None`。对于品牌为空，显示 `Unknown brand` 或直接省略。标题过长时可以正常换行，不要截断到无法理解。
+
+评论证据放在卡片内部的 `Review evidence` expander 中。每条证据显示 rating、chunk_text 或 text、score，不展示过多 metadata。没有 evidence 时显示：
+
+```text
+No review evidence returned for this item.
+```
+
+`source_ranks`、`source_scores`、`sources` 这些算法细节不要作为主视觉，但可以放到 “Retrieval details” expander 里。普通用户默认看到的是推荐理由，而不是 dense/bm25 分数。
+
+如果 results 为空，显示正常空状态：
+
+```text
+No recommendations found. Try a broader query or remove constraints.
+```
+
+如果 diagnostics 非空，用 “System notes” 折叠区域展示，用于调试 fallback、部分失败或可恢复错误。不要让 diagnostics 作为主页面重点。页面底部可以提供默认关闭的 “Developer details” expander 展示 raw response。
+
+## 阶段 10 API Client 要求
+
+`cartwise/ui/api_client.py` 负责封装 HTTP 请求，不要在 `app.py` 中散落写请求细节。轻量 API client 至少包含：
+
+```text
+check_ready()
+recommend(query, user_id=None, top_k=5)
+```
+
+API client 应设置合理 timeout，例如 90 秒，因为当前后端可能包含 Evidence RAG 和 LLM 解释生成。client 应正确处理连接失败、超时、非 2xx 响应、后端返回 503、422 和 500，并把错误转换成 UI 可展示的结构化错误信息。不要让底层 HTTP 异常直接冒泡到 Streamlit 页面。
+
+API 返回错误时，页面应给出友好提示。422 表示输入不合法，应提示用户检查 query 和 top_k。503 表示后端未就绪或依赖不可用，应提示检查 FastAPI、Qdrant、模型、索引或 LLM key。500 表示后端内部错误，应提示查看后端日志。不要直接把 Python traceback 显示给用户。
 
 ## API 设计规则
 
@@ -53,7 +159,6 @@ Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、r
 
 ## 禁止事项
 
-- 不实现 Streamlit 页面。
 - 不启动 Web 服务作为本阶段文档更新的一部分。
 - 不删除 `cartwise/core/llm.py`、`cartwise/core/evidence_rag.py` 或 `cartwise/core/config.py`。
 - 不修改阶段 0 冻结 fixture 来掩盖行为变化。
@@ -63,10 +168,24 @@ Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、r
 
 ## 下一步任务
 
-1. 阅读 `cartwise/ui/README.md`、`cartwise/api/schemas.py`、`cartwise/api/main.py` 和 `README.md` 中的 API 启动说明。
-2. 新增 `cartwise/ui/app.py`，实现 Streamlit 页面通过 HTTP 调用 `POST /api/v1/recommend`。
-3. 页面展示用户 ID、query、Top K、推荐商品、召回来源、推荐理由、潜在缺点、评论证据、请求耗时和错误状态。
-4. 保持 Streamlit 与后端边界清晰：UI 不得直接导入或调用 RecommendationService、EvidenceService、Qdrant、LLM 或模型对象。
+1. 已阅读 `cartwise/ui/README.md`、`cartwise/api/schemas.py`、`cartwise/api/main.py` 和 `README.md` 中的 API 启动说明。
+2. 已新增 `cartwise/ui/api_client.py`，封装 `GET /health/ready` 和 `POST /api/v1/recommend`。
+3. 已新增 `cartwise/ui/app.py`，实现 Streamlit 页面通过 HTTP 调用 FastAPI。
+4. 已实现页面展示用户 ID、query、Top K、推荐商品、召回来源、推荐理由、潜在缺点、评论证据、请求耗时和错误状态。
+5. 已新增 `tests/test_ui_api_client.py`，只测试 API client，不启动 Streamlit 页面，不依赖真实 FastAPI、Qdrant 或 LLM。
+6. 已更新 `cartwise/ui/README.md`，说明如何启动后端和前端，以及 Streamlit 只通过 HTTP 调用 FastAPI 的边界。
+7. 已保持 Streamlit 与后端边界清晰：UI 未直接导入或调用 RecommendationService、EvidenceService、Qdrant、LLM 或模型对象。
+
+## 阶段 10 完成摘要
+
+阶段 10 Streamlit 前端代码层任务已完成：
+
+- `cartwise/ui/api_client.py`：新增轻量 HTTP client，默认后端地址为 `http://127.0.0.1:8000`，支持 `CARTWISE_API_BASE_URL` 在页面侧覆盖；client 使用 `httpx` 调用 `/health/ready` 和 `/api/v1/recommend`，设置 90 秒 timeout，并通过 `trust_env=False` 避免本地 127.0.0.1 请求走环境代理。
+- `cartwise/ui/app.py`：新增 Streamlit 单轮推荐页面，主页面展示 query 输入、Top K、推荐卡片、推荐理由、潜在缺点、评论证据、请求耗时、错误状态、System notes 和 Developer details；sidebar 展示 API base URL、backend readiness 和 Advanced options 中的 user_id。
+- `cartwise/ui/README.md`：更新后端和前端启动说明，明确必须先确认 `/health/ready` ready，并说明 UI 只通过 HTTP 调用 FastAPI。
+- `tests/test_ui_api_client.py`：新增 API client 单元测试，覆盖 ready 成功、ready 503、连接失败、recommend 成功、recommend 422、recommend 503、recommend 500 和 recommend timeout。
+
+本阶段未修改 FastAPI 后端接口、Application Service、RecommendationService、EvidenceService、retrieval、Prompt、Fusion、过滤规则、Qdrant collection、模型参数或阶段 0 fixture。未启动真实 Web 服务；端到端联调仍取决于本机 Qdrant、collection、数据文件、BM25、LightGCN 模型和 LLM Key 是否齐全。
 
 ## 阶段 9 验收摘要
 
@@ -104,6 +223,12 @@ Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、r
 .\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py
 ```
 
+完成 API client 后，应先运行 UI client 测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_ui_api_client.py -q --basetemp="$env:TEMP\cartwise-pytest-ui"
+```
+
 如修改了 API schema、Application Service 边界或共享响应字段，应运行完整测试：
 
 ```powershell
@@ -111,6 +236,30 @@ Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、r
 ```
 
 ## 最近成功状态
+
+阶段 10 Streamlit API client 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_ui_api_client.py -q --basetemp="$env:TEMP\cartwise-pytest-ui"
+```
+
+结果：
+
+```text
+8 passed
+```
+
+阶段 10 API 回归测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+21 passed
+```
 
 阶段 9 collection 命名轻量模块收尾测试通过：
 
