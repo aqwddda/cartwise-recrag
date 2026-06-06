@@ -17,9 +17,9 @@
 
 ## 当前阶段
 
-当前阶段：阶段 9：FastAPI 接入。
+当前阶段：阶段 10：Streamlit 前端。
 
-阶段 9 的目标是实现正常项目级别的 FastAPI 单轮推荐接口，把已经提取出的 Application Service 接到 HTTP 层。不要把本阶段做成临时 demo，也不要扩展新的推荐算法、召回通道、多轮会话、Streamlit 页面、Redis、Agent、CrossEncoder 或部署能力。
+阶段 9 FastAPI 接入已经通过代码层验收：HTTP schema、fake service 测试、真实 `RecommendationApplicationService` 启动期 composition root、readiness 状态和 API 回归测试均已完成。阶段 10 的目标是实现只通过 HTTP 调用 FastAPI 的 Streamlit 单轮演示页面。不要在阶段 10 中重写推荐、召回、Evidence、Application Service、Prompt、Fusion、过滤规则、Qdrant collection、模型参数或阶段 0 fixture。
 
 ## 当前真实边界
 
@@ -30,32 +30,15 @@
 - `cartwise/core/config.py` 仍是有效配置模块，不属于废弃文件。
 - 正式服务契约中不得重新引入 `smoke_search_only`、`mode` 或其他历史 smoke 分支。
 
-## 阶段 9 目标
+## 阶段 10 目标
 
-优先实现以下接口：
-
-```text
-GET  /health/live
-GET  /health/ready
-POST /api/v1/recommend
-```
-
-可保留现有 `/health` 作为兼容 liveness 入口，但 readiness 必须独立表达重资源是否已经准备好。
-
-阶段 9 应新增或完善：
+实现 Streamlit 演示入口：
 
 ```text
-cartwise/api/schemas.py
-cartwise/api/main.py
-tests/test_api.py
+cartwise/ui/app.py
 ```
 
-实现顺序：
-
-1. 定义 FastAPI schema，先用 fake Application Service 覆盖 HTTP 行为和错误处理。
-2. 设计依赖注入和 composition root，使重资源在启动生命周期或显式构造阶段一次性初始化。
-3. 接入真实 `RecommendationApplicationService`，路由层只调用 Application Service。
-4. 覆盖正常请求、非法输入、LLM fallback、Qdrant 或重资源不可用、readiness 状态等测试。
+Streamlit 只能作为 HTTP 客户端调用 FastAPI，不得导入 retrieval、recommendation、evidence、模型对象、Qdrant client 或 LLM client。页面只实现单轮推荐展示，不做登录、数据库、Redis、多轮会话、Agent、部署能力或复杂前端功能。
 
 ## API 设计规则
 
@@ -80,32 +63,150 @@ tests/test_api.py
 
 ## 下一步任务
 
-1. 阅读 `cartwise/api/README.md`、`cartwise/application/service.py`、`cartwise/application/types.py`、`cartwise/recommendation/service.py`、`cartwise/evidence/service.py` 和 `cartwise/core/config.py`。
-2. 新增 `cartwise/api/schemas.py` 并更新 `cartwise/api/main.py`，先使用 fake Application Service 写 API 测试。
-3. 设计真实资源 composition root，但保持 API 路由只依赖 Application Service。
-4. 接入真实 Application Service 后运行 API 测试、服务层相关测试和阶段 0 回归测试。
+1. 阅读 `cartwise/ui/README.md`、`cartwise/api/schemas.py`、`cartwise/api/main.py` 和 `README.md` 中的 API 启动说明。
+2. 新增 `cartwise/ui/app.py`，实现 Streamlit 页面通过 HTTP 调用 `POST /api/v1/recommend`。
+3. 页面展示用户 ID、query、Top K、推荐商品、召回来源、推荐理由、潜在缺点、评论证据、请求耗时和错误状态。
+4. 保持 Streamlit 与后端边界清晰：UI 不得直接导入或调用 RecommendationService、EvidenceService、Qdrant、LLM 或模型对象。
+
+## 阶段 9 验收摘要
+
+阶段 9 已完成：
+
+- 新增 `cartwise/api/schemas.py`，定义 `RecommendRequest`、推荐响应、证据响应、诊断响应和 health 响应 schema。
+- 更新 `cartwise/api/main.py`，提供 `create_app(application_service=...)` 测试注入入口、`GET /health/live`、`GET /health/ready` 和 `POST /api/v1/recommend`。
+- 保留兼容 `/health`，并继续让 Qdrant health check 绕过环境代理。
+- API 路由只调用注入的 Application Service，并通过 `ApplicationRecommendationRequest` 与应用层交互。
+- `POST /api/v1/recommend` 已处理请求校验、服务未初始化、业务 `ValueError`、重资源不可用类异常和未知异常。
+- `GET /health/ready` 当前以 app 中是否存在 Application Service 实例作为就绪核心判断，不在 readiness 请求中初始化重资源。
+- 新增 `tests/test_api.py`，使用 fake Application Service 返回真实 `ApplicationRecommendationResult` 形状，覆盖 schema、路由、错误处理、readiness 和内部对象裁剪。
+- 新增 `cartwise/application/factory.py`，提供真实 `build_application_service()` composition root，按启动期一次性构造 `RecommendationApplicationService`。
+- `cartwise/api/main.py` 已接入 FastAPI lifespan：默认 app 启动时构造真实服务，成功后写入 `app.state`；失败时保留初始化错误并让 `/health/ready` 返回 503，不在请求路径重复初始化。
+- 真实 builder 复用正式 `RecommendationService`、`EvidenceService` 和 `RecommendationApplicationService`，不导入或调用 `Stage8SmokeAdapter`。
+- 新增 `tests/test_api_dependencies.py` 和 `tests/test_api_lifespan.py`，通过 monkeypatch fake 掉重资源，验证 builder 依赖关系、startup success/failure、fake service 注入和请求复用启动期服务。
+- FastAPI builder 默认设备已改为 `cpu`，仍可通过 `ApplicationServiceBuildConfig(device="cuda")` 显式请求 CUDA。
+- Product Dense Qdrant collection 命名已抽到轻量模块 `cartwise/retrieval/collection_names.py`，API builder 不再为命名导入 `cartwise.retrieval.dense`。
+- Evidence Qdrant collection 命名已抽到轻量模块 `cartwise/evidence/collections.py`，API builder 与 `scripts/pipeline/build_evidence_index.py` 共用同一命名规则。
+- `cartwise/application/factory.py` 已延迟导入 pyarrow、OpenAI、Qdrant、Dense、BM25、LightGCN、Evidence RAG 等生产依赖；fake-service API 测试不需要触发真实 builder 或加载重资源。
+
+阶段 9 未启动真实 uvicorn 服务做外部联调；真实 ready 状态仍取决于本机 Qdrant、collection、数据文件、BM25、LightGCN 模型和 LLM Key 是否齐全。该项留到阶段 10 UI 联调前检查，不通过修改业务逻辑兜底。
 
 ## 验收命令
 
-阶段 9 初始验收命令：
+阶段 10 初始验收命令：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_api.py
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py
 ```
 
-阶段 9 完成前应同时回归服务层和阶段 0 基线：
+完成 Streamlit 页面后，应至少回归 API 测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_application_service.py tests/test_recommendation_service.py tests/test_evidence_service.py tests/regression/test_legacy_regression.py tests/test_api.py
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py
 ```
 
-如修改了推荐、Evidence 或 Application 服务边界，应运行完整测试：
+如修改了 API schema、Application Service 边界或共享响应字段，应运行完整测试：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ## 最近成功状态
+
+阶段 9 collection 命名轻量模块收尾测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api_dependencies.py tests/test_api_lifespan.py tests/test_api.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+21 passed
+```
+
+阶段 9 collection 命名轻量模块收尾后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+145 passed, 3 warnings
+```
+
+阶段 9 builder 收尾测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+20 passed
+```
+
+阶段 9 builder 收尾后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+144 passed, 3 warnings
+```
+
+阶段 9 真实 builder 和 lifespan 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+16 passed, 3 warnings
+```
+
+阶段 9 真实 builder 接入后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+140 passed, 3 warnings
+```
+
+阶段 9 API fake-service 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+11 passed
+```
+
+阶段 9 API 接口层改动后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+135 passed, 3 warnings
+```
 
 结构重构收尾后完整测试通过：
 

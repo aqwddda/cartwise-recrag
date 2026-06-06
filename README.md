@@ -4,16 +4,16 @@ CartWise 是一个基于 RAG 的可解释个性化电商导购系统。项目使
 
 ## 当前状态
 
-当前源码已经完成推荐链路的结构重构和服务层提取，下一阶段是 FastAPI 接入。FastAPI 推荐接口和 Streamlit 页面尚未实现。
+当前源码已经完成推荐链路的结构重构、服务层提取和 FastAPI 接入。下一阶段是 Streamlit 页面；Streamlit 必须只通过 HTTP 调用 FastAPI。
 
 最近验证状态：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-# 124 passed, 3 warnings
+# 145 passed, 3 warnings
 
-.\.venv\Scripts\python.exe -m pytest tests/regression/test_legacy_regression.py
-# 2 passed, 3 warnings
+.\.venv\Scripts\python.exe -m pytest tests/test_api_dependencies.py tests/test_api_lifespan.py tests/test_api.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+# 21 passed
 ```
 
 ## 核心能力
@@ -29,8 +29,8 @@ CartWise 是一个基于 RAG 的可解释个性化电商导购系统。项目使
 
 ```text
 cartwise/
-  application/      # RecommendationApplicationService，未来 FastAPI 的业务入口
-  api/              # FastAPI 边界说明；真实推荐接口待实现
+  application/      # RecommendationApplicationService 和 API composition root
+  api/              # FastAPI 推荐接口、schema、lifespan 和 readiness
   catalog/          # 商品文档构造共享逻辑
   core/             # config.py 仍有效；llm.py/evidence_rag.py 是兼容 wrapper
   evidence/         # Evidence RAG、EvidenceService 和证据类型
@@ -45,7 +45,7 @@ scripts/
     stage8_smoke_adapter.py
 ```
 
-正式业务入口是 `cartwise.application.RecommendationApplicationService`。未来 FastAPI 应调用该服务，而不是在路由里重新拼装 Dense、BM25、Popularity、LightGCN、Fusion、Qdrant 或 LLM。
+正式业务入口是 `cartwise.application.RecommendationApplicationService`。FastAPI 路由调用该服务，而不是在路由里重新拼装 Dense、BM25、Popularity、LightGCN、Fusion、Qdrant 或 LLM。
 
 ## 主要模块
 
@@ -64,13 +64,21 @@ scripts/
 .\.venv\Scripts\python.exe -m scripts.tools.run_stage8_smoke --scope full --query "guitar tuner for beginners" --top-k 5 --dense-k 10 --bm25-k 10 --device cuda
 ```
 
-阶段 9 待实现 API 入口：
+FastAPI 入口：
 
 ```text
 GET  /health/live
 GET  /health/ready
 POST /api/v1/recommend
 ```
+
+启动后端：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn cartwise.api.main:app --reload
+```
+
+默认 app 会在启动期构造真实 `RecommendationApplicationService`。如果本机 Qdrant、collection、数据文件、BM25、LightGCN 模型或 LLM Key 缺失，`/health/ready` 会返回 not ready 和初始化错误。
 
 阶段 10 待实现 UI 入口：
 
@@ -92,10 +100,10 @@ POST /api/v1/recommend
 .\.venv\Scripts\python.exe -m pytest tests/test_application_service.py tests/test_recommendation_service.py tests/test_evidence_service.py tests/regression/test_legacy_regression.py
 ```
 
-未来 API 阶段：
+API 测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_api.py
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py
 ```
 
 ## 开发规则摘要

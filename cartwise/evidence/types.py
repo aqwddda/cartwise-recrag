@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from cartwise.evidence.rag import ProductExplanation
 from cartwise.recommendation.types import Diagnostic, RecommendedCandidate
+
+if TYPE_CHECKING:
+    from cartwise.evidence.rag import ProductExplanation
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,6 @@ class EvidenceRequest:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceResult:
-    explanations: Sequence[ProductExplanation]
+    explanations: Sequence["ProductExplanation"]
     evidence_by_product: Mapping[str, Sequence[EvidenceItem]]
     diagnostics: Sequence[Diagnostic] = field(default_factory=tuple)

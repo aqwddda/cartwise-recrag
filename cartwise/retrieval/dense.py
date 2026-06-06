@@ -15,30 +15,16 @@ from qdrant_client.http import models as qdrant_models
 
 from cartwise.catalog.documents import build_product_document
 from cartwise.query.llm import QueryTranslator, prepare_search_query
+from cartwise.retrieval.collection_names import (
+    PRODUCT_DENSE_MODEL_SPECS,
+    product_collection_name,
+)
 
 
 PRODUCT_POINT_NAMESPACE = uuid.UUID("cde786cc-a6b4-4a1b-9b8c-411cd8dd7822")
 
 
-@dataclass(frozen=True, slots=True)
-class DenseModelSpec:
-    key: str
-    model_name: str
-    collection_suffix: str
-
-
-DENSE_MODEL_SPECS = {
-    "e5": DenseModelSpec(
-        key="e5",
-        model_name="intfloat/e5-small-v2",
-        collection_suffix="e5_small_v2",
-    ),
-    "blair": DenseModelSpec(
-        key="blair",
-        model_name="hyp1231/blair-roberta-base",
-        collection_suffix="blair_roberta_base",
-    ),
-}
+DENSE_MODEL_SPECS = PRODUCT_DENSE_MODEL_SPECS
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,11 +202,7 @@ def load_dense_encoder(
 
 
 def collection_name(scope: str, model_key: str) -> str:
-    try:
-        suffix = DENSE_MODEL_SPECS[model_key].collection_suffix
-    except KeyError as error:
-        raise ValueError(f"unsupported dense model: {model_key}") from error
-    return f"cartwise_products_{scope}_{suffix}"
+    return product_collection_name(scope, model_key)
 
 
 def product_point_id(parent_asin: str) -> str:
