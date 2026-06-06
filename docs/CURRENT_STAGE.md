@@ -80,9 +80,9 @@ tests/test_api.py
 
 ## 下一步任务
 
-1. 继续完善真实资源 composition root，把已经验证过的脚本依赖构造最小迁移到 API 启动阶段。
-2. 保持 API 路由只依赖 Application Service，不把 Dense、BM25、Popularity、LightGCN、Qdrant 或 LLM 构造写入路由函数。
-3. 接入真实 Application Service 后运行 API 测试、服务层相关测试和阶段 0 回归测试。
+1. 在真实本机环境下启动 `uvicorn cartwise.api.main:app --reload`，检查 Qdrant、模型、BM25、LightGCN、Evidence collection 和 LLM 配置是否全部可用。
+2. 使用真实 API 请求验证 `/health/ready` 和 `POST /api/v1/recommend`，记录成功样例或初始化失败原因。
+3. 若真实环境缺少数据、索引、模型、Qdrant collection 或 LLM Key，只补齐运行环境，不修改推荐、召回、Evidence 或 Application 业务逻辑。
 
 ## 阶段 9 当前进展
 
@@ -94,8 +94,11 @@ tests/test_api.py
 - API 路由只调用注入的 Application Service，并通过 `ApplicationRecommendationRequest` 与应用层交互。
 - `POST /api/v1/recommend` 已处理请求校验、服务未初始化、业务 `ValueError`、重资源不可用类异常和未知异常。
 - `GET /health/ready` 当前以 app 中是否存在 Application Service 实例作为就绪核心判断，不在 readiness 请求中初始化重资源。
-- `build_application_service()` 当前仍是显式占位，真实重资源 composition root 尚未完成。
 - 新增 `tests/test_api.py`，使用 fake Application Service 返回真实 `ApplicationRecommendationResult` 形状，覆盖 schema、路由、错误处理、readiness 和内部对象裁剪。
+- 新增 `cartwise/application/factory.py`，提供真实 `build_application_service()` composition root，按启动期一次性构造 `RecommendationApplicationService`。
+- `cartwise/api/main.py` 已接入 FastAPI lifespan：默认 app 启动时构造真实服务，成功后写入 `app.state`；失败时保留初始化错误并让 `/health/ready` 返回 503，不在请求路径重复初始化。
+- 真实 builder 复用正式 `RecommendationService`、`EvidenceService` 和 `RecommendationApplicationService`，不导入或调用 `Stage8SmokeAdapter`。
+- 新增 `tests/test_api_dependencies.py` 和 `tests/test_api_lifespan.py`，通过 monkeypatch fake 掉重资源，验证 builder 依赖关系、startup success/failure、fake service 注入和请求复用启动期服务。
 
 ## 验收命令
 
@@ -118,6 +121,30 @@ tests/test_api.py
 ```
 
 ## 最近成功状态
+
+阶段 9 真实 builder 和 lifespan 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+16 passed, 3 warnings
+```
+
+阶段 9 真实 builder 接入后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+140 passed, 3 warnings
+```
 
 阶段 9 API fake-service 测试通过：
 

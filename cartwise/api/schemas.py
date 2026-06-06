@@ -108,6 +108,7 @@ class ReadyHealthResponse(BaseModel):
     status: str
     application_service: str
     resources: dict[str, str]
+    initialization_error: str | None = None
 
 
 def recommendation_response_from_result(
