@@ -8,13 +8,12 @@ import json
 import re
 from collections.abc import Mapping
 from collections.abc import Sequence
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from cartwise.core.config import Settings
-from cartwise.core.llm import (
+from cartwise.query.llm import (
     QueryIntentError,
     QueryTranslationError,
     create_query_intent_parser,
@@ -29,15 +28,9 @@ from cartwise.retrieval.dense import (
     load_dense_encoder,
 )
 from cartwise.retrieval.filters import resolve_filter_constraints
-from cartwise.retrieval.filters import FilterConstraints
-from cartwise.retrieval.fusion import (
-    BM25_CHANNEL,
-    DENSE_CHANNEL,
-    FusionConfig,
-    LIGHTGCN_CHANNEL,
-    POPULARITY_CHANNEL,
-    fuse_candidates,
-)
+from cartwise.recommendation.service import RecommendationService
+from cartwise.recommendation.types import RecommendationRequest
+from cartwise.retrieval.fusion import FusionConfig
 from cartwise.retrieval.lightgcn import LightGCNRecommender
 from cartwise.retrieval.popularity import PopularityRecommender
 from scripts.paths import (
@@ -129,18 +122,6 @@ class LazySettingsQueryIntentParser:
 
 def _item(items_by_parent_asin: Mapping[str, dict[str, Any]], parent_asin: str) -> dict[str, Any]:
     return dict(items_by_parent_asin.get(parent_asin, {"parent_asin": parent_asin}))
-
-
-def _filter_constraints_payload(constraints: FilterConstraints) -> dict[str, Any]:
-    return {
-        "category_tags": list(constraints.category_tags),
-        "min_price": constraints.min_price,
-        "max_price": constraints.max_price,
-        "brands": list(constraints.brands),
-        "excluded_brands": list(constraints.excluded_brands),
-        "color_tags": list(constraints.color_tags),
-        "material_tags": list(constraints.material_tags),
-    }
 
 
 class PopularityAuditChannel:
@@ -296,13 +277,16 @@ class FusionAuditChannel:
         intent_parser: LazySettingsQueryIntentParser,
         config: FusionConfig,
     ) -> None:
-        self.dense_retriever = dense_retriever
-        self.bm25_retriever = bm25_retriever
-        self.lightgcn_recommender = lightgcn_recommender
-        self.popularity_recommender = popularity_recommender
-        self.items_by_parent_asin = items_by_parent_asin
-        self.intent_parser = intent_parser
-        self.config = config
+        self.service = RecommendationService(
+            dense_retriever=dense_retriever,
+            bm25_retriever=bm25_retriever,
+            lightgcn_recommender=lightgcn_recommender,
+            popularity_recommender=popularity_recommender,
+            items_by_parent_asin=items_by_parent_asin,
+            intent_parser=intent_parser,
+            filter_resolver=resolve_filter_constraints,
+            fusion_config=config,
+        )
         self._last_ranked_results: list[dict[str, Any]] = []
         self._last_filtered_results: list[dict[str, Any]] = []
         self._last_fusion_intent: dict[str, Any] = {}
@@ -315,51 +299,14 @@ class FusionAuditChannel:
         k: int,
         user_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        config = replace(self.config, final_top_k=k)
-        intent = self.intent_parser.parse(value)
-        constraints = resolve_filter_constraints(
-            product_terms=intent.product_terms,
-            brands=intent.filters.brands,
-            excluded_brands=intent.filters.excluded_brands,
-            min_price=intent.filters.min_price,
-            max_price=intent.filters.max_price,
-            color_tags=intent.filters.color_tags,
-            material_tags=intent.filters.material_tags,
+        result = self.service.recommend(
+            RecommendationRequest(query=value, user_id=user_id, top_k=k)
         )
-        self._last_fusion_intent = {
-            "search_query": intent.search_query,
-            "product_terms": list(intent.product_terms),
-            "raw_filters": _filter_constraints_payload(intent.filters),
-        }
-        self._last_filter_constraints = _filter_constraints_payload(constraints)
-        normalized_user_id = user_id.strip() if user_id else ""
-        known_user = bool(
-            normalized_user_id
-            and normalized_user_id in self.lightgcn_recommender.user_to_index
-        )
-        personalization_user_id = normalized_user_id or "__cold_start__"
-        candidates_by_channel = {
-            DENSE_CHANNEL: self._dense_candidates(intent.search_query, config.dense_k),
-            BM25_CHANNEL: self._bm25_candidates(intent.search_query, config.bm25_k),
-            LIGHTGCN_CHANNEL: (
-                self._lightgcn_candidates(normalized_user_id, config.lightgcn_k)
-                if known_user
-                else []
-            ),
-            POPULARITY_CHANNEL: self._popularity_candidates(
-                personalization_user_id,
-                config.popularity_k,
-            ),
-        }
-        output = fuse_candidates(
-            candidates_by_channel,
-            constraints,
-            config=config,
-            known_user=known_user,
-        )
-        self._last_ranked_results = output.ranked_results
-        self._last_filtered_results = output.filtered_results
-        return output.final_results
+        self._last_ranked_results = list(result.fusion_output.ranked_results)
+        self._last_filtered_results = list(result.fusion_output.filtered_results)
+        self._last_fusion_intent = dict(result.intent)
+        self._last_filter_constraints = dict(result.filter_constraints_payload)
+        return list(result.final_candidates)
 
     def history(self, value: str) -> list[dict[str, Any]]:
         del value
@@ -405,75 +352,11 @@ class FusionAuditChannel:
             "filtered_json": filtered_path,
         }
 
-    def _dense_candidates(self, query: str, k: int) -> list[dict[str, Any]]:
-        return [
-            {
-                "channel": DENSE_CHANNEL,
-                "rank": rank,
-                "parent_asin": result["parent_asin"],
-                "score": result["dense_score"],
-                "score_type": "dense_score",
-                "item": _item(self.items_by_parent_asin, result["parent_asin"]),
-                "retrieval_query": result["retrieval_query"],
-                "document": result.get("document"),
-            }
-            for rank, result in enumerate(self.dense_retriever.search(query, k=k), start=1)
-        ]
-
     def audit_metadata(self) -> dict[str, Any]:
         return {
             "fusion_intent": self._last_fusion_intent,
             "filter_constraints": self._last_filter_constraints,
         }
-
-    def _bm25_candidates(self, query: str, k: int) -> list[dict[str, Any]]:
-        return [
-            {
-                "channel": BM25_CHANNEL,
-                "rank": rank,
-                "parent_asin": result["parent_asin"],
-                "score": result["bm25_score"],
-                "score_type": "bm25_score",
-                "item": _item(self.items_by_parent_asin, result["parent_asin"]),
-                "retrieval_query": result["retrieval_query"],
-                "document": result["document"],
-            }
-            for rank, result in enumerate(self.bm25_retriever.search(query, k=k), start=1)
-        ]
-
-    def _lightgcn_candidates(self, user_id: str, k: int) -> list[dict[str, Any]]:
-        return [
-            {
-                "channel": LIGHTGCN_CHANNEL,
-                "rank": rank,
-                "parent_asin": parent_asin,
-                "score": None,
-                "score_type": None,
-                "item": _item(self.items_by_parent_asin, parent_asin),
-                "retrieval_query": None,
-            }
-            for rank, parent_asin in enumerate(
-                self.lightgcn_recommender.recommend(user_id, k=k),
-                start=1,
-            )
-        ]
-
-    def _popularity_candidates(self, user_id: str, k: int) -> list[dict[str, Any]]:
-        return [
-            {
-                "channel": POPULARITY_CHANNEL,
-                "rank": rank,
-                "parent_asin": parent_asin,
-                "score": self.popularity_recommender.item_counts[parent_asin],
-                "score_type": "interaction_count",
-                "item": _item(self.items_by_parent_asin, parent_asin),
-                "retrieval_query": None,
-            }
-            for rank, parent_asin in enumerate(
-                self.popularity_recommender.recommend(user_id, k=k),
-                start=1,
-            )
-        ]
 
 
 def load_channels(

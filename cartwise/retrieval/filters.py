@@ -11,35 +11,16 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, TypeVar
 
+from cartwise.paths import PROCESSED_ROOT
+from cartwise.query.types import FilterConstraints
+
 
 Candidate = TypeVar("Candidate", bound=Mapping[str, Any])
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_ITEM_TO_CATEGORIES_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "item_to_categories.json"
-)
+DEFAULT_ITEM_TO_CATEGORIES_PATH = PROCESSED_ROOT / "item_to_categories.json"
 DEFAULT_BRAND_ALIAS_TO_CANONICAL_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "brand_alias_to_canonical.json"
+    PROCESSED_ROOT / "brand_alias_to_canonical.json"
 )
-
-
-@dataclass(frozen=True, slots=True)
-class FilterConstraints:
-    """Explicit user constraints applied after candidate ranking."""
-
-    category_tags: Collection[str] = ()
-    min_price: float | None = None
-    max_price: float | None = None
-    brands: Collection[str] = ()
-    excluded_brands: Collection[str] = ()
-    color_tags: Collection[str] = ()
-    material_tags: Collection[str] = ()
 
 
 @dataclass(frozen=True, slots=True)

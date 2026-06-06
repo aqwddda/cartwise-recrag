@@ -12,8 +12,8 @@ from typing import Any
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-from cartwise.core.llm import QueryTranslator, prepare_search_query
-from cartwise.retrieval.dense import build_product_document
+from cartwise.catalog.documents import build_product_document
+from cartwise.query.llm import QueryTranslator, prepare_search_query
 
 
 BM25_INDEX_SCHEMA_VERSION = 1

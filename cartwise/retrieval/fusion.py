@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from numbers import Real
 from typing import Any
 
+from cartwise.query.types import FilterConstraints
 from cartwise.retrieval.filters import (
-    FilterConstraints,
     derive_category_tags,
     derive_color_tags,
     derive_material_tags,

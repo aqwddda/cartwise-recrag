@@ -14,22 +14,22 @@ import httpx
 from openai import OpenAI
 
 from cartwise.core.config import Settings
-from cartwise.core.evidence_rag import (
+from cartwise.evidence.rag import (
     EvidenceRagConfig,
     OpenAICompatibleExplanationGenerator,
     QdrantReviewEvidenceRetriever,
-    explain_candidates,
 )
+from cartwise.evidence.service import EvidenceService
 from cartwise.retrieval.bm25 import BM25Index, BM25Retriever
 from cartwise.retrieval.dense import DenseRetriever
 from cartwise.retrieval.dense import collection_name as dense_collection_name
 from cartwise.retrieval.dense import create_qdrant_client, load_dense_encoder
-from cartwise.retrieval.filters import FilterConstraints
-from cartwise.retrieval.fusion import BM25_CHANNEL, DENSE_CHANNEL, FusionConfig, fuse_candidates
+from cartwise.retrieval.fusion import BM25_CHANNEL, DENSE_CHANNEL, FusionConfig
 from scripts.paths import ARTIFACT_REPORTS_ROOT, PRODUCT_BM25_ARTIFACT_ROOT, PROCESSED_ROOTS
 from scripts.pipeline.build_evidence_index import collection_name as evidence_collection_name
 from scripts.pipeline.build_evidence_index import DEFAULT_REVIEW_EMBEDDING_MODEL
 from scripts.tools.item_metadata import load_items_by_parent_asin
+from scripts.tools.stage8_smoke_adapter import Stage8SmokeAdapter
 
 
 DEFAULT_QUERY = "guitar tuner for beginners"
@@ -325,54 +325,6 @@ def main() -> None:
         BM25Index.load(PRODUCT_BM25_ARTIFACT_ROOT / args.scope / "bm25.json.gz"),
     )
 
-    dense_candidates = [
-        {
-            "channel": DENSE_CHANNEL,
-            "rank": rank,
-            "parent_asin": result["parent_asin"],
-            "score": result["dense_score"],
-            "score_type": "dense_score",
-            "item": dict(items_by_parent_asin[result["parent_asin"]]),
-            "retrieval_query": result["retrieval_query"],
-            "document": result.get("document"),
-        }
-        for rank, result in enumerate(
-            dense_retriever.search(args.query, k=args.dense_k),
-            start=1,
-        )
-        if result["parent_asin"] in items_by_parent_asin
-    ]
-    bm25_candidates = [
-        {
-            "channel": BM25_CHANNEL,
-            "rank": rank,
-            "parent_asin": result["parent_asin"],
-            "score": result["bm25_score"],
-            "score_type": "bm25_score",
-            "item": dict(items_by_parent_asin[result["parent_asin"]]),
-            "retrieval_query": result["retrieval_query"],
-            "document": result.get("document"),
-        }
-        for rank, result in enumerate(
-            bm25_retriever.search(args.query, k=args.bm25_k),
-            start=1,
-        )
-        if result["parent_asin"] in items_by_parent_asin
-    ]
-    fusion = fuse_candidates(
-        {
-            DENSE_CHANNEL: dense_candidates,
-            BM25_CHANNEL: bm25_candidates,
-        },
-        FilterConstraints(),
-        config=FusionConfig(
-            dense_k=args.dense_k,
-            bm25_k=args.bm25_k,
-            final_top_k=args.top_k,
-        ),
-        known_user=False,
-    )
-
     evidence_retriever = QdrantReviewEvidenceRetriever(
         client,
         collection=evidence_collection_name(args.scope, DEFAULT_REVIEW_EMBEDDING_MODEL),
@@ -399,17 +351,31 @@ def main() -> None:
         final_review_k=5,
         max_candidate_chunk_k=20,
     )
-    explanations = []
-    for result in fusion.final_results:
-        explanations.extend(
-            explain_candidates(
-                english_query=args.query,
-                candidates=[result],
-                retriever=evidence_retriever,
-                generator=generator,
-                config=evidence_config,
-            )
-        )
+    evidence_service = EvidenceService(
+        evidence_retriever=evidence_retriever,
+        generator=generator,
+        config=evidence_config,
+    )
+    smoke_adapter = Stage8SmokeAdapter(
+        dense_retriever=dense_retriever,
+        bm25_retriever=bm25_retriever,
+        evidence_service=evidence_service,
+        items_by_parent_asin=items_by_parent_asin,
+        fusion_config=FusionConfig(
+            dense_k=args.dense_k,
+            bm25_k=args.bm25_k,
+            final_top_k=args.top_k,
+        ),
+    )
+    smoke_result = smoke_adapter.run(query=args.query, top_k=args.top_k)
+    dense_candidates = list(
+        smoke_result.candidates_by_channel.get(DENSE_CHANNEL, ())
+    )
+    bm25_candidates = list(
+        smoke_result.candidates_by_channel.get(BM25_CHANNEL, ())
+    )
+    fusion = smoke_result.fusion_output
+    explanations = list(smoke_result.evidence_result.explanations)
 
     report = build_report(
         args=args,

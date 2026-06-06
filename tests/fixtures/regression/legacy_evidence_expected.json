@@ -1,0 +1,19 @@
+{
+  "no_evidence": {
+    "cited_review_ids": [],
+    "evidence_review_ids": [],
+    "fallback": true,
+    "has_potential_cons": true,
+    "has_reason": true,
+    "parent_asin": "TUNER_A"
+  },
+  "with_evidence": {
+    "cited_review_ids": ["TUNER_A-R1", "TUNER_A-R2", "TUNER_A-LOW"],
+    "evidence_ratings": [5.0, 4.0, 2.0],
+    "evidence_review_ids": ["TUNER_A-R1", "TUNER_A-R2", "TUNER_A-LOW"],
+    "fallback": true,
+    "has_potential_cons": true,
+    "has_reason": true,
+    "parent_asin": "TUNER_A"
+  }
+}

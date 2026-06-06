@@ -1,0 +1,79 @@
+{
+  "chinese": {
+    "filter_constraints": {"category_tags": ["Guitar Tuners"], "max_price": null, "excluded_brands": []},
+    "final_parent_asins": ["TUNER_A", "TUNER_B", "FENDER_A", "OVER_BUDGET"],
+    "fusion_intent": {"search_query": "beginner guitar tuner", "product_terms": ["guitar tuner"]},
+    "known_user": false
+  },
+  "empty": {
+    "filter_constraints": {"category_tags": ["No Matching Category"], "max_price": null, "excluded_brands": []},
+    "filtered_results": [
+      {"parent_asin": "TUNER_A", "filter_reason": "category_mismatch"},
+      {"parent_asin": "STAND_A", "filter_reason": "category_mismatch"},
+      {"parent_asin": "MIC_A", "filter_reason": "category_mismatch"},
+      {"parent_asin": "OVER_BUDGET", "filter_reason": "category_mismatch"}
+    ],
+    "final_parent_asins": [],
+    "fusion_intent": {"search_query": "empty candidate query", "product_terms": ["empty"]},
+    "known_user": false
+  },
+  "english": {
+    "filter_constraints": {"category_tags": ["Guitar Tuners"], "max_price": null, "excluded_brands": []},
+    "final_parent_asins": ["TUNER_A", "TUNER_B", "FENDER_A", "OVER_BUDGET"],
+    "final_results": [
+      {"parent_asin": "TUNER_A", "rank": 1, "fusion_score": 0.01631411951348493, "sources": ["dense", "bm25", "popularity"]},
+      {"parent_asin": "TUNER_B", "rank": 2, "fusion_score": 0.015401903754627182, "sources": ["dense", "bm25"]},
+      {"parent_asin": "FENDER_A", "rank": 3, "fusion_score": 0.010317460317460317, "sources": ["dense"]},
+      {"parent_asin": "OVER_BUDGET", "rank": 4, "fusion_score": 0.005543154761904761, "sources": ["bm25", "popularity"]}
+    ],
+    "fusion_intent": {"search_query": "guitar tuner for beginners", "product_terms": ["guitar tuner"]},
+    "known_user": false
+  },
+  "known_user": {
+    "filter_constraints": {"category_tags": ["Guitar Tuners"], "max_price": null, "excluded_brands": []},
+    "final_parent_asins": ["TUNER_A", "TUNER_B", "FENDER_A", "OVER_BUDGET"],
+    "final_results": [
+      {"parent_asin": "TUNER_A", "rank": 1, "fusion_score": 0.016197233344245505, "sources": ["dense", "bm25", "lightgcn", "popularity"]},
+      {"parent_asin": "TUNER_B", "rank": 2, "fusion_score": 0.015454785827604442, "sources": ["dense", "bm25", "lightgcn"]},
+      {"parent_asin": "FENDER_A", "rank": 3, "fusion_score": 0.01117511520737327, "sources": ["dense", "lightgcn"]},
+      {"parent_asin": "OVER_BUDGET", "rank": 4, "fusion_score": 0.004749503968253968, "sources": ["bm25", "popularity"]}
+    ],
+    "fusion_intent": {"search_query": "guitar tuner for beginners", "product_terms": ["guitar tuner"]},
+    "known_user": true
+  },
+  "negative": {
+    "filter_constraints": {"category_tags": ["Microphones"], "max_price": null, "excluded_brands": ["USB"]},
+    "filtered_results": [
+      {"parent_asin": "STAND_A", "filter_reason": "category_mismatch"},
+      {"parent_asin": "TUNER_A", "filter_reason": "category_mismatch"},
+      {"parent_asin": "OVER_BUDGET", "filter_reason": "category_mismatch"}
+    ],
+    "final_parent_asins": ["MIC_A"],
+    "fusion_intent": {"search_query": "microphone for recording vocals but not USB", "product_terms": ["microphone"]},
+    "known_user": false
+  },
+  "no_user": {
+    "filter_constraints": {"category_tags": ["Guitar Tuners"], "max_price": null, "excluded_brands": []},
+    "final_parent_asins": ["TUNER_A", "TUNER_B", "FENDER_A", "OVER_BUDGET"],
+    "fusion_intent": {"search_query": "guitar tuner for beginners", "product_terms": ["guitar tuner"]},
+    "known_user": false
+  },
+  "price": {
+    "filter_constraints": {"category_tags": ["Guitar Tuners"], "max_price": 50, "excluded_brands": []},
+    "filtered_results": [
+      {"parent_asin": "TUNER_B", "filter_reason": "price_above_max"},
+      {"parent_asin": "OVER_BUDGET", "filter_reason": "price_above_max"},
+      {"parent_asin": "STAND_A", "filter_reason": "category_mismatch"},
+      {"parent_asin": "MIC_A", "filter_reason": "category_mismatch"}
+    ],
+    "final_parent_asins": ["TUNER_A", "FENDER_A"],
+    "fusion_intent": {"search_query": "guitar tuner under 50 dollars", "product_terms": ["guitar tuner"]},
+    "known_user": false
+  },
+  "unknown_user": {
+    "filter_constraints": {"category_tags": ["Guitar Tuners"], "max_price": null, "excluded_brands": []},
+    "final_parent_asins": ["TUNER_A", "TUNER_B", "FENDER_A", "OVER_BUDGET"],
+    "fusion_intent": {"search_query": "guitar tuner for beginners", "product_terms": ["guitar tuner"]},
+    "known_user": false
+  }
+}

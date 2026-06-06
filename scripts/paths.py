@@ -1,30 +1,27 @@
-"""Shared repository paths used by runnable scripts."""
+"""Compatibility exports for script path constants.
 
-from pathlib import Path
+New application code should import from ``cartwise.paths``. This module remains
+for existing CLI and pipeline scripts during the migration.
+"""
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-DATA_ROOT = PROJECT_ROOT / "data"
-RAW_DATA_ROOT = DATA_ROOT / "raw"
-AMAZON_REVIEWS_RAW_ROOT = RAW_DATA_ROOT / "amazon_reviews_2023"
-AMAZON_ESCI_RAW_ROOT = RAW_DATA_ROOT / "amazon_esci"
-PROCESSED_ROOT = DATA_ROOT / "processed"
-DEV_PROCESSED_ROOT = PROCESSED_ROOT / "dev"
-PROCESSED_ROOTS = {
-    "dev": DEV_PROCESSED_ROOT,
-    "full": PROCESSED_ROOT,
-}
-
-MODELS_ROOT = PROJECT_ROOT / "models"
-REPORTS_ROOT = PROJECT_ROOT / "reports"
-METRICS_ROOT = REPORTS_ROOT / "metrics"
-
-ARTIFACTS_ROOT = PROJECT_ROOT / "artifacts"
-ARTIFACT_INDEXES_ROOT = ARTIFACTS_ROOT / "indexes"
-ARTIFACT_REPORTS_ROOT = ARTIFACTS_ROOT / "reports"
-ARTIFACT_PREVIEWS_ROOT = ARTIFACTS_ROOT / "previews"
-PRODUCT_DENSE_ARTIFACT_ROOT = ARTIFACT_INDEXES_ROOT / "product_dense"
-PRODUCT_BM25_ARTIFACT_ROOT = ARTIFACT_INDEXES_ROOT / "product_bm25"
-EVIDENCE_DENSE_ARTIFACT_ROOT = ARTIFACT_INDEXES_ROOT / "evidence_dense"
-RETRIEVAL_AUDIT_ARTIFACT_ROOT = ARTIFACT_REPORTS_ROOT / "retrieval_audit"
+from cartwise.paths import (  # noqa: F401
+    AMAZON_ESCI_RAW_ROOT,
+    AMAZON_REVIEWS_RAW_ROOT,
+    ARTIFACT_INDEXES_ROOT,
+    ARTIFACT_PREVIEWS_ROOT,
+    ARTIFACT_REPORTS_ROOT,
+    ARTIFACTS_ROOT,
+    DATA_ROOT,
+    DEV_PROCESSED_ROOT,
+    EVIDENCE_DENSE_ARTIFACT_ROOT,
+    METRICS_ROOT,
+    MODELS_ROOT,
+    PRODUCT_BM25_ARTIFACT_ROOT,
+    PRODUCT_DENSE_ARTIFACT_ROOT,
+    PROJECT_ROOT,
+    PROCESSED_ROOT,
+    PROCESSED_ROOTS,
+    RAW_DATA_ROOT,
+    REPORTS_ROOT,
+    RETRIEVAL_AUDIT_ARTIFACT_ROOT,
+)

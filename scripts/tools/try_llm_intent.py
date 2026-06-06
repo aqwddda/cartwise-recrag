@@ -9,7 +9,7 @@ from dataclasses import asdict
 
 from scripts.paths import PROCESSED_ROOTS
 from cartwise.core.config import Settings
-from cartwise.core.llm import (
+from cartwise.query.llm import (
     QueryIntentError,
     QueryTranslationError,
     create_query_intent_parser,
