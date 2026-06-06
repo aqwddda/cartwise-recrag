@@ -80,10 +80,22 @@ tests/test_api.py
 
 ## 下一步任务
 
-1. 阅读 `cartwise/api/README.md`、`cartwise/application/service.py`、`cartwise/application/types.py`、`cartwise/recommendation/service.py`、`cartwise/evidence/service.py` 和 `cartwise/core/config.py`。
-2. 新增 `cartwise/api/schemas.py` 并更新 `cartwise/api/main.py`，先使用 fake Application Service 写 API 测试。
-3. 设计真实资源 composition root，但保持 API 路由只依赖 Application Service。
-4. 接入真实 Application Service 后运行 API 测试、服务层相关测试和阶段 0 回归测试。
+1. 继续完善真实资源 composition root，把已经验证过的脚本依赖构造最小迁移到 API 启动阶段。
+2. 保持 API 路由只依赖 Application Service，不把 Dense、BM25、Popularity、LightGCN、Qdrant 或 LLM 构造写入路由函数。
+3. 接入真实 Application Service 后运行 API 测试、服务层相关测试和阶段 0 回归测试。
+
+## 阶段 9 当前进展
+
+已完成 FastAPI 接口层第一步：
+
+- 新增 `cartwise/api/schemas.py`，定义 `RecommendRequest`、推荐响应、证据响应、诊断响应和 health 响应 schema。
+- 更新 `cartwise/api/main.py`，提供 `create_app(application_service=...)` 测试注入入口、`GET /health/live`、`GET /health/ready` 和 `POST /api/v1/recommend`。
+- 保留兼容 `/health`，并继续让 Qdrant health check 绕过环境代理。
+- API 路由只调用注入的 Application Service，并通过 `ApplicationRecommendationRequest` 与应用层交互。
+- `POST /api/v1/recommend` 已处理请求校验、服务未初始化、业务 `ValueError`、重资源不可用类异常和未知异常。
+- `GET /health/ready` 当前以 app 中是否存在 Application Service 实例作为就绪核心判断，不在 readiness 请求中初始化重资源。
+- `build_application_service()` 当前仍是显式占位，真实重资源 composition root 尚未完成。
+- 新增 `tests/test_api.py`，使用 fake Application Service 返回真实 `ApplicationRecommendationResult` 形状，覆盖 schema、路由、错误处理、readiness 和内部对象裁剪。
 
 ## 验收命令
 
@@ -106,6 +118,30 @@ tests/test_api.py
 ```
 
 ## 最近成功状态
+
+阶段 9 API fake-service 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+11 passed
+```
+
+阶段 9 API 接口层改动后完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+135 passed, 3 warnings
+```
 
 结构重构收尾后完整测试通过：
 
