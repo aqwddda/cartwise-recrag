@@ -21,6 +21,7 @@
 | `FI-09` | 推荐结果后的商品评论追问模式 | 中 | 完成阶段 8 评论证据与解释生成后 |
 | `FI-10` | 阶段 7 过滤策略改进 | 中 | 完成阶段 7 候选融合基础链路后 |
 | `FI-11` | BM25 召回质量改进 | 中 | 完成阶段 7 fusion 人工审核后 |
+| `FI-12` | 端到端推荐链路 5 秒内延迟优化 | 高 | FastAPI + Streamlit 跑通并完成阶段级 timing 后 |
 
 ### FI-01：候选扩展方向
 
@@ -652,3 +653,245 @@ LLM 输出 JSON 合法率
   持久化倒排索引。
 - 升级时保持阶段 6 的商品文档构建顺序、分词规则和 BM25 参数不变，先验证数据结构
   优化本身，避免同时改变召回口径。
+
+### FI-12：端到端推荐链路 5 秒内延迟优化
+
+- 状态：待设计与分阶段验证
+- 优先级：高
+- 适用阶段：FastAPI + Streamlit 跑通，并具备阶段级 `cartwise_timing` 日志后
+
+#### 背景
+
+阶段 10 跑通后，当前完整推荐请求的主要瓶颈不在 Streamlit，而在后端
+Evidence retrieval 与远程 LLM explanation。最近一次 `top_k=3` 的暖态实测为：
+
+```text
+HTTP client_ms=15564
+API latency_ms=15560
+RecommendationService=3049 ms
+EvidenceService=13114 ms
+Evidence retrieval=6105 ms
+LLM explanation=7007 ms
+```
+
+其中 RecommendationService 内部的 intent parsing LLM 约 `2.6s`，
+retrieval + fusion 约 `0.4s`。因此，如果保留当前同步链路：
+
+```text
+远程 intent LLM
+-> 串行多商品 Evidence retrieval
+-> 单次大 prompt 远程 LLM explanation
+```
+
+则 `top_k=3` 稳定进入 5 秒以内基本不现实。5 秒目标需要同时减少远程 LLM
+关键路径耗时、压缩 explanation prompt，并并行化商品级证据检索。
+
+#### 目标延迟预算
+
+以 `top_k=3` 暖态请求为目标，端到端预算暂定为：
+
+| 阶段 | 目标预算 |
+|---|---:|
+| Intent / query constraints | `<= 0.5-0.8s` |
+| Product retrieval + fusion | `<= 0.7s` |
+| Evidence retrieval | `<= 1.2-1.5s` |
+| Explanation generation | `<= 1.5-2.0s` |
+| API serialization / HTTP overhead | `<= 0.3s` |
+
+验收时必须同时记录 client 总耗时和 API `latency_ms`，不能只看某个内部阶段。
+
+#### 分阶段优化方案
+
+##### FI-12A：候选商品级 Evidence retrieval 并行
+
+推荐阶段完成后，对最终候选商品并行执行评论证据检索：
+
+```text
+retrieve_product_evidence(product_1)
+retrieve_product_evidence(product_2)
+retrieve_product_evidence(product_3)
+```
+
+每个商品内部仍保持现有顺序：
+
+```text
+initial -> expanded(必要时) -> low_rating(必要时)
+```
+
+不得删除或跳过这些分支，因为它们会影响 evidence 选择结果和低评分证据覆盖。
+并行完成后必须按原候选顺序重组 `evidence_by_product`，避免改变推荐结果展示顺序。
+
+建议先使用 bounded thread pool：
+
+```text
+max_workers = min(3, len(candidates))
+```
+
+不要引入异步任务队列、Redis 或跨请求后台任务。需要验证 `QdrantClient` 在本机并发查询下
+是否稳定，并继续保持 `QdrantReviewEvidenceRetriever` 的 query vector cache 线程安全。
+
+预期收益：
+
+```text
+top_k=3 Evidence retrieval: ~6105 ms -> ~2500-3500 ms
+top_k=3 API total: ~15560 ms -> ~12000-13000 ms
+```
+
+该阶段仍无法达到 5 秒，但能验证候选级并行的稳定性。
+
+##### FI-12B：Explanation prompt 压缩
+
+当前 `top_k=3` explanation prompt 约 `33k chars`。后续应只向 LLM 提供解释必需字段：
+
+```text
+product: parent_asin, title, brand, price
+evidence: review_id, rating, chunk_text
+```
+
+优先裁剪或压缩：
+
+```text
+完整 item payload
+categories / details_json 等长字段
+helpful_vote / verified_purchase / timestamp
+review title
+过长 chunk_text
+每商品传入 LLM 的 evidence 数量
+```
+
+建议增加独立配置，例如：
+
+```text
+max_prompt_evidence_per_product = 3
+max_prompt_chunk_chars = 300-500
+```
+
+注意：减少 prompt 中的 evidence 数量会改变 LLM 可引用范围，但不应改变
+EvidenceResult 中返回给前端展示的完整 evidence。引用校验必须基于传入 prompt 的 evidence
+范围执行，确保 LLM 不引用不存在或未提供给它的 `review_id`。
+
+预期收益：
+
+```text
+prompt_chars: ~33101 -> ~8000-15000
+LLM explanation: ~7000 ms -> ~3000-5000 ms
+```
+
+##### FI-12C：Intent LLM fast path
+
+当前英文 query 也会默认调用 intent parsing LLM，约 `2.6-3.6s`。若要进入 5 秒，
+必须减少该远程 LLM 调用在常见请求中的占比。
+
+后续可增加 rule-first fast path：
+
+1. 英文 query 且未检测到明确价格、品牌、颜色、材质、排除品牌等结构化约束时，
+   不调用 intent LLM。
+2. 直接使用原 query 作为 `search_query`，并使用空 `FilterConstraints`。
+3. 只有存在明显结构化约束、中文输入或 fast path 低置信时，才调用原 LLM intent parser。
+
+该方案不改变召回算法、Fusion 公式或过滤规则，但会改变部分 query 是否经过 LLM 解析的
+决策路径，因此必须通过回归测试和人工审核确认不会明显降低过滤准确率。
+
+预期收益：
+
+```text
+RecommendationService: ~3000 ms -> ~600-1000 ms
+```
+
+##### FI-12D：Per-product LLM explanation 并行
+
+如果 FI-12A 到 FI-12C 后仍不能达到 5 秒，可评估将一次批量 explanation LLM 改为按商品
+拆分的小 prompt，并并行调用：
+
+```text
+LLM(product_1 evidence)
+LLM(product_2 evidence)
+LLM(product_3 evidence)
+```
+
+该改动风险高于 FI-12A 到 FI-12C，因为它会改变当前批量 explanation contract：
+
+```text
+one prompt -> exactly one item per candidate
+```
+
+拆分后需要改为每个商品独立校验、独立 fallback，再按候选顺序合并。必须设置并发上限，
+例如：
+
+```text
+max_llm_workers = min(3, len(candidates))
+```
+
+并记录外部 LLM provider 的并发限制、失败率和重试策略。若任一商品 LLM 失败，优先只让
+该商品模板 fallback，不应让全部商品解释失败。
+
+预期收益取决于 LLM provider 是否真正并发执行。理想情况下：
+
+```text
+LLM explanation: ~3000-5000 ms -> ~1500-3000 ms
+```
+
+但可能增加请求数、成本、限流风险和结果抖动。因此该项应在 prompt 压缩与 intent fast path
+之后再做。
+
+#### 建议实施顺序
+
+1. 实现候选商品级 Evidence retrieval 并行，保持每个商品内部 evidence 选择逻辑不变。
+2. 压缩 explanation prompt，减少不必要字段、限制 chunk 长度和 prompt evidence 数。
+3. 增加英文无显式结构化约束 query 的 intent LLM fast path。
+4. 重新测量 `top_k=1/3/5` 的 client 总耗时、API `latency_ms` 和 `cartwise_timing`。
+5. 如果 `top_k=3` 仍高于 5 秒，再评估 per-product LLM explanation 并行或更快模型。
+
+#### 预期里程碑
+
+| 版本 | 改动 | `top_k=3` 预期 |
+|---|---|---:|
+| 当前 | 已有 query vector cache 和 timing | `~15.6s` |
+| V1 | Candidate-level Evidence retrieval 并行 | `~12-13s` |
+| V2 | Explanation prompt 压缩 | `~8-10s` |
+| V3 | Intent LLM fast path | `~5.5-7s` |
+| V4 | Per-product LLM 并行或更快 explanation 方案 | `~4-6s` |
+
+#### 验收指标
+
+每轮优化至少测量：
+
+```text
+client_ms
+api_latency_ms
+recommendation_service_ms
+intent_parsing_ms
+retrieval_fusion_ms
+evidence_retrieval_ms
+evidence_search stage/count/ms
+llm_explanation_ms
+prompt_chars
+results count
+fallback count
+citation validation pass/fail
+```
+
+必须至少对以下请求重复测量：
+
+```text
+top_k=1
+top_k=3
+top_k=5
+```
+
+同时保留功能正确性验证：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_evidence_rag.py tests/test_evidence_service.py tests/test_recommendation_service.py tests/test_application_service.py
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py
+.\.venv\Scripts\python.exe -m pytest tests/test_ui_api_client.py
+```
+
+#### 决策规则
+
+- 若目标是低风险优化，先将 `top_k=3` 稳定降到 `8s` 内，再评估是否继续冲击 `5s`。
+- 若目标是稳定 `5s` 内，必须接受至少一个策略变化：intent LLM fast path、per-product LLM
+  并行、更快 explanation 模型，或 explanation 缓存。
+- 不允许通过删除低评分证据检索、跳过引用校验、减少候选商品数量来伪造延迟达标。
+- 不允许修改召回算法、Fusion 公式、过滤规则、Qdrant collection 命名、模型参数或阶段 0
+  fixture 来掩盖延迟问题。

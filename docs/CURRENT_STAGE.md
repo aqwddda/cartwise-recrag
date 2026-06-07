@@ -187,6 +187,47 @@ API 返回错误时，页面应给出友好提示。422 表示输入不合法，
 
 本阶段未修改 FastAPI 后端接口、Application Service、RecommendationService、EvidenceService、retrieval、Prompt、Fusion、过滤规则、Qdrant collection、模型参数或阶段 0 fixture。未启动真实 Web 服务；端到端联调仍取决于本机 Qdrant、collection、数据文件、BM25、LightGCN 模型和 LLM Key 是否齐全。
 
+## 阶段 10 延迟优化摘要
+
+阶段 10 前端跑通后的第一轮小范围延迟优化已完成：
+
+- Streamlit 页面默认 `top_k` 从 5 改为 3，并使用 `st.session_state` 保存上一次推荐结果；页面 rerun 时不重复调用 `POST /api/v1/recommend`，只有表单提交时才发起新的推荐请求。
+- Application、Recommendation、Evidence 和 RAG 层已增加 `cartwise_timing` 日志，用于记录 Application 总耗时、RecommendationService 总耗时、EvidenceService 总耗时、intent parsing、retrieval、fusion、evidence search、evidence retrieval、LLM explanation、prompt 字符数和候选数。
+- `QdrantReviewEvidenceRetriever` 已增加小型 LRU 风格 query vector cache，同一个 review query 在 initial/expanded/low_rating 多次 search 时复用已编码向量；缓存上限 128，并使用 lock 保护共享服务实例下的并发访问。
+- 已补充 `tests/test_evidence_rag.py` 用例，验证相同 review query 的多次 Qdrant evidence search 不会重复调用 encoder。
+
+本轮未修改召回算法、Fusion 公式、过滤规则、Qdrant collection 命名、模型参数、阶段 0 fixture，也未引入异步任务队列、Redis、多轮会话或 Agent。
+
+本轮实测：
+
+```text
+warm /health/ready: 8 ms
+
+HTTP recommendation:
+top_k=1 client_ms=11192 api_latency_ms=11186
+top_k=3 client_ms=15564 api_latency_ms=15560
+top_k=5 client_ms=22744 api_latency_ms=22740
+
+Service timing logs:
+top_k=1 recommendation_service_ms=4362 evidence_service_ms=6684 evidence_retrieval_ms=2360 llm_explanation_ms=4323
+top_k=3 recommendation_service_ms=3049 evidence_service_ms=13114 evidence_retrieval_ms=6105 llm_explanation_ms=7007
+top_k=5 recommendation_service_ms=2930 evidence_service_ms=26544 evidence_retrieval_ms=14601 llm_explanation_ms=11941
+```
+
+对比优化前诊断数据，`top_k=3` 从约 20.5s 降至约 15.6s，`top_k=5` 从约 30.3s 降至约 22.7s。瓶颈仍主要在 Evidence retrieval 和 LLM explanation；Evidence search 调用次数不应在本阶段通过删减逻辑强行降低，因为 initial/expanded/low_rating 分支会影响 evidence 选择语义。
+
+## 阶段 10 最终验收摘要
+
+阶段 10 已完成代码层验收并准备提交：
+
+- Streamlit 页面已实现，只通过 HTTP 调用 `GET /health/ready` 和 `POST /api/v1/recommend`。
+- UI 默认 `top_k=3`，并使用 `st.session_state` 保存上一次推荐结果，避免页面 rerun 重复触发推荐请求。
+- UI client 已覆盖 ready、503、连接失败、recommend 成功、422、503、500 和 timeout。
+- API 路由、schema、lifespan 和真实 composition root 回归测试通过。
+- Evidence RAG、EvidenceService、RecommendationService 和 ApplicationService 相关测试通过。
+- 完整测试通过：`154 passed, 3 warnings`。未修改阶段 0 fixture，未重建 Qdrant collection、索引、模型或数据。
+- 端到端 5 秒内延迟优化不纳入阶段 10 当前提交，已作为 `FI-12` 写入 `docs/FUTURE_IMPROVEMENTS.md`。
+
 ## 阶段 9 验收摘要
 
 阶段 9 已完成：
@@ -259,6 +300,68 @@ API 返回错误时，页面应给出友好提示。422 表示输入不合法，
 
 ```text
 21 passed
+```
+
+阶段 10 延迟优化后 targeted 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_evidence_rag.py tests/test_evidence_service.py tests/test_recommendation_service.py tests/test_application_service.py -q --basetemp="$env:TEMP\cartwise-pytest-perf-unit"
+```
+
+结果：
+
+```text
+18 passed, 3 warnings
+```
+
+阶段 10 延迟优化后 UI client 测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_ui_api_client.py -q --basetemp="$env:TEMP\cartwise-pytest-ui"
+```
+
+结果：
+
+```text
+8 passed
+```
+
+阶段 10 延迟优化后 API 回归测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
+```
+
+结果：
+
+```text
+21 passed
+```
+
+阶段 10 最终验收相关测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile cartwise\ui\app.py cartwise\ui\api_client.py cartwise\application\service.py cartwise\recommendation\service.py cartwise\evidence\service.py cartwise\evidence\rag.py tests\test_evidence_rag.py tests\test_ui_api_client.py
+
+.\.venv\Scripts\python.exe -m pytest tests/test_ui_api_client.py tests/test_evidence_rag.py tests/test_evidence_service.py tests/test_recommendation_service.py tests/test_application_service.py tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py -q --basetemp="$env:TEMP\cartwise-pytest-stage10"
+```
+
+结果：
+
+```text
+47 passed, 3 warnings
+```
+
+阶段 10 最终验收完整测试通过：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q --basetemp="$env:TEMP\cartwise-pytest-full"
+```
+
+结果：
+
+```text
+154 passed, 3 warnings
 ```
 
 阶段 9 collection 命名轻量模块收尾测试通过：

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+import logging
+from time import perf_counter
 from typing import Any
 
 from cartwise.query.types import FilterConstraints
@@ -21,6 +23,8 @@ from cartwise.retrieval.filters import resolve_filter_constraints
 
 FilterResolver = Callable[..., FilterConstraints]
 FusionFunction = Callable[..., Any]
+
+logger = logging.getLogger(__name__)
 
 
 class RecommendationService:
@@ -50,12 +54,15 @@ class RecommendationService:
         self.fusion_config = fusion_config
 
     def recommend(self, request: RecommendationRequest) -> RecommendationResult:
+        total_started = perf_counter()
         config = (
             replace(self.fusion_config, final_top_k=request.top_k)
             if request.top_k is not None
             else self.fusion_config
         )
+        intent_started = perf_counter()
         intent = self.intent_parser.parse(request.query)
+        intent_ms = _elapsed_ms(intent_started)
         constraints = self.filter_resolver(
             product_terms=intent.product_terms,
             brands=intent.filters.brands,
@@ -71,6 +78,7 @@ class RecommendationService:
             and normalized_user_id in self.lightgcn_recommender.user_to_index
         )
         personalization_user_id = normalized_user_id or "__cold_start__"
+        retrieval_started = perf_counter()
         candidates_by_channel = {
             DENSE_CHANNEL: self._dense_candidates(intent.search_query, config.dense_k),
             BM25_CHANNEL: self._bm25_candidates(intent.search_query, config.bm25_k),
@@ -84,13 +92,16 @@ class RecommendationService:
                 config.popularity_k,
             ),
         }
+        retrieval_ms = _elapsed_ms(retrieval_started)
+        fusion_started = perf_counter()
         output = self.fusion_function(
             candidates_by_channel,
             constraints,
             config=config,
             known_user=known_user,
         )
-        return RecommendationResult(
+        fusion_ms = _elapsed_ms(fusion_started)
+        result = RecommendationResult(
             query=request.query,
             search_query=intent.search_query,
             known_user=known_user,
@@ -105,6 +116,24 @@ class RecommendationService:
             fusion_output=output,
             final_candidates=output.final_results,
         )
+        logger.info(
+            "cartwise_timing recommendation_service total_ms=%s intent_parsing_ms=%s "
+            "retrieval_ms=%s fusion_ms=%s retrieval_fusion_ms=%s "
+            "dense_candidates=%s bm25_candidates=%s lightgcn_candidates=%s "
+            "popularity_candidates=%s final_candidates=%s known_user=%s",
+            _elapsed_ms(total_started),
+            intent_ms,
+            retrieval_ms,
+            fusion_ms,
+            retrieval_ms + fusion_ms,
+            len(candidates_by_channel[DENSE_CHANNEL]),
+            len(candidates_by_channel[BM25_CHANNEL]),
+            len(candidates_by_channel[LIGHTGCN_CHANNEL]),
+            len(candidates_by_channel[POPULARITY_CHANNEL]),
+            len(result.final_candidates),
+            known_user,
+        )
+        return result
 
     def _dense_candidates(self, query: str, k: int) -> list[dict[str, Any]]:
         return [
@@ -188,3 +217,7 @@ def _filter_constraints_payload(constraints: FilterConstraints) -> dict[str, Any
         "color_tags": list(constraints.color_tags),
         "material_tags": list(constraints.material_tags),
     }
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((perf_counter() - started) * 1000))

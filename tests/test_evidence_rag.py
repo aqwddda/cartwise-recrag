@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+
+import numpy as np
 
 from cartwise.core.evidence_rag import (
     EvidenceRagConfig,
+    QdrantReviewEvidenceRetriever,
     build_review_query,
     explain_candidates,
     retrieve_product_evidence,
@@ -70,6 +74,43 @@ class FakeGenerator:
     def generate(self, prompt: str) -> str:
         self.prompts.append(prompt)
         return self.content
+
+
+@dataclass
+class FakeQdrantPoint:
+    payload: dict[str, object]
+    score: float
+
+
+@dataclass
+class FakeQdrantResponse:
+    points: list[FakeQdrantPoint]
+
+
+class FakeQdrantClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def query_points(self, **kwargs):
+        self.calls.append(kwargs)
+        parent_asin = kwargs["query_filter"]["must"][0]["match"]["value"]
+        return FakeQdrantResponse(
+            points=[
+                FakeQdrantPoint(
+                    payload=hit("r1", parent_asin=parent_asin),
+                    score=0.8,
+                )
+            ]
+        )
+
+
+class CountingEncoder:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def encode_query(self, query: str) -> np.ndarray:
+        self.queries.append(query)
+        return np.array([float(len(self.queries)), 0.0], dtype=np.float32)
 
 
 def test_review_query_uses_english_query_title_and_categories() -> None:
@@ -189,3 +230,22 @@ def test_retrieval_outside_candidate_scope_falls_back_without_evidence() -> None
     assert explanations[0].fallback is True
     assert explanations[0].parent_asin == "P1"
     assert explanations[0].evidence == ()
+
+
+def test_qdrant_evidence_retriever_reuses_query_embedding() -> None:
+    client = FakeQdrantClient()
+    encoder = CountingEncoder()
+    retriever = QdrantReviewEvidenceRetriever(
+        client,
+        collection="reviews",
+        encoder=encoder,
+    )
+
+    retriever.search("same review query", parent_asin="P1", k=2)
+    retriever.search("same review query", parent_asin="P1", k=3, rating_lte=3)
+    retriever.search("different review query", parent_asin="P1", k=2)
+
+    assert encoder.queries == ["same review query", "different review query"]
+    assert client.calls[0]["query"] == [1.0, 0.0]
+    assert client.calls[1]["query"] == [1.0, 0.0]
+    assert client.calls[2]["query"] == [2.0, 0.0]

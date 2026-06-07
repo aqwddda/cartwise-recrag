@@ -42,22 +42,28 @@ def main() -> None:
             placeholder=QUERY_PLACEHOLDER,
             height=110,
         )
-        top_k = st.number_input("Top K", min_value=1, max_value=50, value=5, step=1)
+        top_k = st.number_input("Top K", min_value=1, max_value=50, value=3, step=1)
         submitted = st.form_submit_button("Find recommendations", type="primary")
 
-    if not submitted:
-        return
-    if not query.strip():
-        st.warning("Enter a shopping need before requesting recommendations.")
-        return
+    if submitted:
+        if not query.strip():
+            st.warning("Enter a shopping need before requesting recommendations.")
+            return
 
-    with st.spinner("Finding products and reading review evidence..."):
-        result = client.recommend(
-            query.strip(),
-            user_id=user_id,
-            top_k=int(top_k),
+        with st.spinner("Finding products and reading review evidence..."):
+            st.session_state["last_recommendation_result"] = client.recommend(
+                query.strip(),
+                user_id=user_id,
+                top_k=int(top_k),
+            )
+            st.session_state["last_recommendation_query"] = query.strip()
+
+    last_result = st.session_state.get("last_recommendation_result")
+    if isinstance(last_result, ApiResult):
+        render_recommendation_result(
+            last_result,
+            original_query=st.session_state.get("last_recommendation_query", ""),
         )
-    render_recommendation_result(result, original_query=query.strip())
 
 
 def render_sidebar() -> tuple[str, str | None]:

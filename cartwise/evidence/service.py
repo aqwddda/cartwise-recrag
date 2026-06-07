@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+import logging
+from time import perf_counter
 from typing import Any
 
 from cartwise.evidence.rag import EvidenceRagConfig, ProductExplanation, explain_candidates
@@ -11,6 +13,8 @@ from cartwise.recommendation.types import RecommendedCandidate
 
 
 ExplainFunction = Callable[..., list[ProductExplanation]]
+
+logger = logging.getLogger(__name__)
 
 
 class EvidenceService:
@@ -30,6 +34,7 @@ class EvidenceService:
         self.explain_function = explain_function
 
     def explain(self, request: EvidenceRequest) -> EvidenceResult:
+        started = perf_counter()
         explanations = self.explain_function(
             english_query=request.english_query,
             candidates=[_candidate_payload(candidate) for candidate in request.candidates],
@@ -58,10 +63,19 @@ class EvidenceService:
             ]
             for explanation in explanations
         }
-        return EvidenceResult(
+        result = EvidenceResult(
             explanations=explanations,
             evidence_by_product=evidence_by_product,
         )
+        logger.info(
+            "cartwise_timing evidence_service total_ms=%s candidates=%s "
+            "explanations=%s evidence_items=%s",
+            _elapsed_ms(started),
+            len(request.candidates),
+            len(result.explanations),
+            sum(len(items) for items in result.evidence_by_product.values()),
+        )
+        return result
 
 
 def _candidate_payload(candidate: RecommendedCandidate) -> Mapping[str, Any]:
@@ -76,3 +90,7 @@ def _candidate_payload(candidate: RecommendedCandidate) -> Mapping[str, Any]:
         "retrieval_query": candidate.retrieval_query,
         "document": candidate.document,
     }
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((perf_counter() - started) * 1000))

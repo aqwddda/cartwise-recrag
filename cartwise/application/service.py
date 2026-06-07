@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from time import perf_counter
 from typing import Any
 
 from cartwise.application.types import (
@@ -15,6 +17,8 @@ from cartwise.recommendation.types import (
     recommended_candidate_from_mapping,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class RecommendationApplicationService:
     """Call recommendation first, then evidence, and shape final results."""
@@ -27,6 +31,8 @@ class RecommendationApplicationService:
         self,
         request: ApplicationRecommendationRequest,
     ) -> ApplicationRecommendationResult:
+        total_started = perf_counter()
+        recommendation_started = perf_counter()
         recommendation_result = self.recommendation_service.recommend(
             RecommendationRequest(
                 query=request.query,
@@ -34,10 +40,12 @@ class RecommendationApplicationService:
                 top_k=request.top_k,
             )
         )
+        recommendation_ms = _elapsed_ms(recommendation_started)
         candidates = tuple(
             recommended_candidate_from_mapping(candidate)
             for candidate in recommendation_result.final_candidates
         )
+        evidence_started = perf_counter()
         evidence_result = self.evidence_service.explain(
             EvidenceRequest(
                 query=request.query,
@@ -45,6 +53,7 @@ class RecommendationApplicationService:
                 candidates=candidates,
             )
         )
+        evidence_ms = _elapsed_ms(evidence_started)
         explanations_by_parent_asin = {
             explanation.parent_asin: explanation
             for explanation in evidence_result.explanations
@@ -83,7 +92,7 @@ class RecommendationApplicationService:
                     fallback=True if explanation is None else explanation.fallback,
                 )
             )
-        return ApplicationRecommendationResult(
+        result = ApplicationRecommendationResult(
             query=request.query,
             search_query=recommendation_result.search_query,
             known_user=recommendation_result.known_user,
@@ -96,3 +105,18 @@ class RecommendationApplicationService:
                 *evidence_result.diagnostics,
             ),
         )
+        logger.info(
+            "cartwise_timing application total_ms=%s recommendation_service_ms=%s "
+            "evidence_service_ms=%s top_k=%s results=%s known_user=%s",
+            _elapsed_ms(total_started),
+            recommendation_ms,
+            evidence_ms,
+            request.top_k,
+            len(result.recommendations),
+            result.known_user,
+        )
+        return result
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((perf_counter() - started) * 1000))

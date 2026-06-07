@@ -4,13 +4,15 @@ CartWise 是一个基于 RAG 的可解释个性化电商导购系统。项目使
 
 ## 当前状态
 
-当前源码已经完成推荐链路的结构重构、服务层提取和 FastAPI 接入。下一阶段是 Streamlit 页面；Streamlit 必须只通过 HTTP 调用 FastAPI。
+当前源码已经完成推荐链路的结构重构、服务层提取、FastAPI 接入和 Streamlit 单轮演示页面。Streamlit 只通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence、Qdrant、模型对象或 LLM client。
+
+阶段 10 已完成第一轮延迟可观测性和小范围优化：后端记录阶段级 `cartwise_timing` 日志，Evidence review query 向量支持进程内缓存，Streamlit 默认 `top_k=3` 并通过 `st.session_state` 避免页面 rerun 重复请求。进一步将端到端推荐压到 5 秒内的优化计划已记录在 `docs/FUTURE_IMPROVEMENTS.md` 的 `FI-12`。
 
 最近验证状态：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-# 145 passed, 3 warnings
+# 154 passed, 3 warnings
 
 .\.venv\Scripts\python.exe -m pytest tests/test_api_dependencies.py tests/test_api_lifespan.py tests/test_api.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
 # 21 passed
@@ -37,7 +39,7 @@ cartwise/
   query/            # Query LLM adapter 和 FilterConstraints 等 query 类型
   recommendation/   # RecommendationService 和推荐服务类型
   retrieval/        # Dense、BM25、Popularity、LightGCN、filters、fusion
-  ui/               # Streamlit 边界说明；页面待实现
+  ui/               # Streamlit HTTP client 和单轮演示页面
 scripts/
   tools/
     audit_retrieval.py
@@ -80,7 +82,7 @@ POST /api/v1/recommend
 
 默认 app 会在启动期构造真实 `RecommendationApplicationService`。如果本机 Qdrant、collection、数据文件、BM25、LightGCN 模型或 LLM Key 缺失，`/health/ready` 会返回 not ready 和初始化错误。
 
-阶段 10 待实现 UI 入口：
+Streamlit UI 入口：
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run cartwise/ui/app.py
@@ -113,6 +115,6 @@ API 测试：
 - 不要从 `cartwise.core.llm` 或 `cartwise.core.evidence_rag` 写新调用；它们当前只是兼容 wrapper。
 - 不要把 `smoke_search_only`、`mode` 或其他历史 smoke 分支重新引入正式服务契约。
 - 不要修改阶段 0 fixture 来掩盖行为变化。
-- Streamlit 未来只能通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence 或模型对象。
+- Streamlit 只能通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence 或模型对象。
 
 更多当前阶段要求见 `docs/CURRENT_STAGE.md`。

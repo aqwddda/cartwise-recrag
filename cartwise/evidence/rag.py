@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from threading import Lock
+from time import perf_counter
 from typing import Any, Protocol
 
 import numpy as np
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+logger = logging.getLogger(__name__)
+QUERY_VECTOR_CACHE_MAX_SIZE = 128
 
 
 EXPLANATION_PROMPT = PromptTemplate.from_template(
@@ -160,6 +167,8 @@ class QdrantReviewEvidenceRetriever:
         self.client = client
         self.collection = collection
         self.encoder = encoder
+        self._query_vector_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._query_vector_cache_lock = Lock()
 
     def search(
         self,
@@ -181,9 +190,10 @@ class QdrantReviewEvidenceRetriever:
                     "range": {"lte": rating_lte},
                 }
             )
+        query_vector = self._encode_query(query)
         response = self.client.query_points(
             collection_name=self.collection,
-            query=self.encoder.encode_query(query).tolist(),
+            query=query_vector.tolist(),
             limit=k,
             query_filter={"must": filters},
             with_payload=True,
@@ -194,6 +204,29 @@ class QdrantReviewEvidenceRetriever:
             payload["score"] = point.score
             results.append(payload)
         return results
+
+    def _encode_query(self, query: str) -> np.ndarray:
+        with self._query_vector_cache_lock:
+            cached = self._query_vector_cache.get(query)
+            if cached is not None:
+                self._query_vector_cache.move_to_end(query)
+                return cached
+        started = perf_counter()
+        vector = self.encoder.encode_query(query)
+        with self._query_vector_cache_lock:
+            cached = self._query_vector_cache.get(query)
+            if cached is not None:
+                self._query_vector_cache.move_to_end(query)
+                return cached
+            self._query_vector_cache[query] = vector
+            if len(self._query_vector_cache) > QUERY_VECTOR_CACHE_MAX_SIZE:
+                self._query_vector_cache.popitem(last=False)
+        logger.info(
+            "cartwise_timing evidence_query_encoding total_ms=%s query_chars=%s",
+            _elapsed_ms(started),
+            len(query),
+        )
+        return vector
 
 
 def explain_candidates(
@@ -209,15 +242,30 @@ def explain_candidates(
     _validate_config(config)
     candidate_map = _candidate_map(candidates)
     try:
-        evidence_by_product = {
-            parent_asin: retrieve_product_evidence(
+        retrieval_started = perf_counter()
+        evidence_by_product = {}
+        for parent_asin, candidate in candidate_map.items():
+            product_started = perf_counter()
+            evidence_by_product[parent_asin] = retrieve_product_evidence(
                 english_query=english_query,
                 candidate=candidate,
                 retriever=retriever,
                 config=config,
             )
-            for parent_asin, candidate in candidate_map.items()
-        }
+            logger.info(
+                "cartwise_timing evidence_product_retrieval parent_asin=%s "
+                "total_ms=%s evidence_items=%s",
+                parent_asin,
+                _elapsed_ms(product_started),
+                len(evidence_by_product[parent_asin]),
+            )
+        logger.info(
+            "cartwise_timing evidence_retrieval total_ms=%s candidates=%s "
+            "evidence_items=%s",
+            _elapsed_ms(retrieval_started),
+            len(candidate_map),
+            sum(len(items) for items in evidence_by_product.values()),
+        )
     except (EvidenceRagError, ValueError, KeyError, TypeError):
         evidence_by_product = {parent_asin: () for parent_asin in candidate_map}
         return _fallback_explanations(candidate_map, evidence_by_product)
@@ -229,7 +277,18 @@ def explain_candidates(
             candidates=list(candidate_map.values()),
             evidence_by_product=evidence_by_product,
         )
-        payload = _parse_explanation_payload(generator.generate(prompt))
+        generation_started = perf_counter()
+        try:
+            content = generator.generate(prompt)
+        finally:
+            logger.info(
+                "cartwise_timing llm_explanation total_ms=%s prompt_chars=%s "
+                "candidates=%s",
+                _elapsed_ms(generation_started),
+                len(prompt),
+                len(candidate_map),
+            )
+        payload = _parse_explanation_payload(content)
         return _validated_explanations(payload, candidate_map, evidence_by_product)
     except (EvidenceRagError, ValueError, KeyError, TypeError, ValidationError, json.JSONDecodeError):
         return _fallback_explanations(candidate_map, evidence_by_product)
@@ -244,21 +303,23 @@ def retrieve_product_evidence(
 ) -> tuple[ReviewEvidence, ...]:
     parent_asin = _required_parent_asin(candidate)
     query = build_review_query(english_query, candidate)
-    hits = list(
-        retriever.search(
-            query,
-            parent_asin=parent_asin,
-            k=config.initial_chunk_k,
-        )
+    hits = _search_evidence(
+        retriever,
+        query,
+        parent_asin=parent_asin,
+        k=config.initial_chunk_k,
+        rating_lte=None,
+        stage="initial",
     )
     _validate_hits_scope(hits, parent_asin=parent_asin)
     if _distinct_review_count(hits) < config.final_review_k:
-        expanded_hits = list(
-            retriever.search(
-                query,
-                parent_asin=parent_asin,
-                k=config.max_candidate_chunk_k,
-            )
+        expanded_hits = _search_evidence(
+            retriever,
+            query,
+            parent_asin=parent_asin,
+            k=config.max_candidate_chunk_k,
+            rating_lte=None,
+            stage="expanded",
         )
         _validate_hits_scope(expanded_hits, parent_asin=parent_asin)
         hits = _merge_hits(
@@ -273,11 +334,13 @@ def retrieve_product_evidence(
     if evidence and not any(_is_low_rating(entry.rating) for entry in evidence):
         evidence = _include_low_rating_evidence(
             evidence,
-            retriever.search(
+            _search_evidence(
+                retriever,
                 query,
                 parent_asin=parent_asin,
                 k=config.max_candidate_chunk_k,
                 rating_lte=3,
+                stage="low_rating",
             ),
             parent_asin=parent_asin,
             final_review_k=config.final_review_k,
@@ -296,6 +359,37 @@ def build_review_query(english_query: str, candidate: Mapping[str, Any]) -> str:
     if not query:
         raise ValueError("review evidence query must not be empty")
     return query
+
+
+def _search_evidence(
+    retriever: ReviewEvidenceRetriever,
+    query: str,
+    *,
+    parent_asin: str,
+    k: int,
+    rating_lte: float | None,
+    stage: str,
+) -> list[Mapping[str, Any]]:
+    started = perf_counter()
+    hits = list(
+        retriever.search(
+            query,
+            parent_asin=parent_asin,
+            k=k,
+            rating_lte=rating_lte,
+        )
+    )
+    logger.info(
+        "cartwise_timing evidence_search stage=%s parent_asin=%s total_ms=%s "
+        "k=%s rating_lte=%s hits=%s",
+        stage,
+        parent_asin,
+        _elapsed_ms(started),
+        k,
+        rating_lte,
+        len(hits),
+    )
+    return hits
 
 
 def build_explanation_prompt(
@@ -534,6 +628,10 @@ def _read_optional_text(value: Any) -> str | None:
 
 def _is_low_rating(rating: float | None) -> bool:
     return rating is not None and rating <= 3
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((perf_counter() - started) * 1000))
 
 
 def _evidence_payload(evidence: ReviewEvidence) -> dict[str, Any]:
