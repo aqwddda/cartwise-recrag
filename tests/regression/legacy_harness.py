@@ -4,8 +4,8 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from cartwise.core.evidence_rag import explain_candidates
-from cartwise.core.llm import ParsedQueryIntent
+from cartwise.evidence.rag import explain_candidates
+from cartwise.query.llm import ParsedQueryIntent
 from cartwise.retrieval.filters import FilterConstraints
 from cartwise.retrieval.fusion import FusionConfig
 from scripts.tools import audit_retrieval

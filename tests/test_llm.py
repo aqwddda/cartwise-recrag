@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from cartwise.core.llm import (
+from cartwise.query.llm import (
     OpenAICompatibleQueryIntentParser,
     OpenAICompatibleQueryTranslator,
     QueryIntentError,

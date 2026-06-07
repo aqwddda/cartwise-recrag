@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cartwise.core.evidence_rag import (
+from cartwise.evidence.rag import (
     EvidenceRagConfig,
     QdrantReviewEvidenceRetriever,
     build_review_query,
