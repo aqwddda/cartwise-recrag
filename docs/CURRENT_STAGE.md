@@ -17,9 +17,13 @@
 
 ## 当前阶段
 
-当前阶段：阶段 10：Streamlit 前端。
+当前阶段：一期收尾：Phase 1 Finalization。
 
-阶段 9 FastAPI 接入已经通过代码层验收：HTTP schema、fake service 测试、真实 `RecommendationApplicationService` 启动期 composition root、readiness 状态和 API 回归测试均已完成。阶段 10 的目标是实现只通过 HTTP 调用 FastAPI 的 Streamlit 单轮演示页面。不要在阶段 10 中重写推荐、召回、Evidence、Application Service、Prompt、Fusion、过滤规则、Qdrant collection、模型参数或阶段 0 fixture。
+阶段 10 FastAPI + Streamlit MVP 已完成代码层验收并已提交。当前任务不继续扩展功能，而是将一期工作收口为可复现、可说明、可继续迭代的状态：更新 README 和阶段文档，明确自然语言 query-level 标注集缺口，将 query-level benchmark 建设移入后续改进，并用全量测试确认本轮文档收尾未破坏项目。
+
+一期收尾不再强行执行阶段 11 原计划中的自然语言 query-level 正式 benchmark。Amazon Reviews 2023 `Musical_Instruments` 数据没有真实导购 query、搜索日志或 query-product 人工相关性标注；因此，当前自然语言 query 链路只作为 demo、延迟诊断、解释质量检查和人工审查场景。严格 query-level 推荐评估集建设已作为 `FI-13` 写入 `docs/FUTURE_IMPROVEMENTS.md`。
+
+本阶段不得修改召回算法、Fusion 公式、过滤规则、Qdrant collection 命名、模型参数、阶段 0 fixture、Prompt 语义或服务架构；不得重建 Qdrant collection、模型、索引或数据；不得新增异步任务队列、Redis、多轮会话、复杂 Agent、CrossEncoder 或 query-level 标注工具实现。
 
 ## 当前真实边界
 
@@ -166,15 +170,26 @@ API 返回错误时，页面应给出友好提示。422 表示输入不合法，
 - 不升级依赖。
 - 不把 Stage8SmokeAdapter 接入 FastAPI 或 Application Service。
 
-## 下一步任务
+## 一期收尾任务
 
-1. 已阅读 `cartwise/ui/README.md`、`cartwise/api/schemas.py`、`cartwise/api/main.py` 和 `README.md` 中的 API 启动说明。
-2. 已新增 `cartwise/ui/api_client.py`，封装 `GET /health/ready` 和 `POST /api/v1/recommend`。
-3. 已新增 `cartwise/ui/app.py`，实现 Streamlit 页面通过 HTTP 调用 FastAPI。
-4. 已实现页面展示用户 ID、query、Top K、推荐商品、召回来源、推荐理由、潜在缺点、评论证据、请求耗时和错误状态。
-5. 已新增 `tests/test_ui_api_client.py`，只测试 API client，不启动 Streamlit 页面，不依赖真实 FastAPI、Qdrant 或 LLM。
-6. 已更新 `cartwise/ui/README.md`，说明如何启动后端和前端，以及 Streamlit 只通过 HTTP 调用 FastAPI 的边界。
-7. 已保持 Streamlit 与后端边界清晰：UI 未直接导入或调用 RecommendationService、EvidenceService、Qdrant、LLM 或模型对象。
+1. 已确认阶段 10 Streamlit、FastAPI、Application、Recommendation、Evidence 和 UI client 相关测试通过，并且阶段 10 收尾 commit 已完成。
+2. 已将 `README.md` 更新为一期收尾状态，补充可复现 Demo 流程、启动命令、API 示例和自然语言 query-level 评估边界。
+3. 已将 `docs/FUTURE_IMPROVEMENTS.md` 新增 `FI-13`，记录 query-level 推荐评估集建设，不在一期临时实现。
+4. 已同步 `docs/DEVELOPMENT_STEPS.md` 和 `docs/PROJECT_PLAN.md`，避免继续把阶段 11 描述为必须完成自然语言 query benchmark。
+5. 本轮未修改业务代码，未重建索引，未改变推荐算法，未改变阶段 0 fixture。
+6. 本轮全量测试通过：`154 passed, 3 warnings`。
+
+## 一期收尾摘要
+
+一期当前以功能闭环和可复现文档收口：FastAPI + Streamlit 单轮 MVP、评论证据 RAG、中文解释、模板回退、阶段级 timing diagnostics 和第一轮低风险延迟优化均已完成。由于当前数据没有 query-level 标注集，阶段 11 不再临时构造不严谨的自然语言正式 benchmark；该任务已作为 `FI-13` 留到后续。
+
+本轮文档收尾涉及：
+
+- `README.md`：补充一期状态、可复现 Demo 流程、API 示例和评估边界。
+- `docs/CURRENT_STAGE.md`：切换当前阶段为一期收尾，并记录测试结果。
+- `docs/DEVELOPMENT_STEPS.md`：将阶段 11 调整为一期收尾。
+- `docs/PROJECT_PLAN.md`：更新当前 MVP 状态和 query-level 评估限制。
+- `docs/FUTURE_IMPROVEMENTS.md`：新增 `FI-13` query-level 推荐评估集建设。
 
 ## 阶段 10 完成摘要
 

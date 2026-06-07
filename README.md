@@ -4,9 +4,11 @@ CartWise 是一个基于 RAG 的可解释个性化电商导购系统。项目使
 
 ## 当前状态
 
-当前源码已经完成推荐链路的结构重构、服务层提取、FastAPI 接入和 Streamlit 单轮演示页面。Streamlit 只通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence、Qdrant、模型对象或 LLM client。
+当前源码已经完成一期功能闭环：推荐链路结构重构、服务层提取、FastAPI 接入、Streamlit 单轮演示页面、阶段级延迟诊断和第一轮低风险延迟优化。Streamlit 只通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence、Qdrant、模型对象或 LLM client。
 
 阶段 10 已完成第一轮延迟可观测性和小范围优化：后端记录阶段级 `cartwise_timing` 日志，Evidence review query 向量支持进程内缓存，Streamlit 默认 `top_k=3` 并通过 `st.session_state` 避免页面 rerun 重复请求。进一步将端到端推荐压到 5 秒内的优化计划已记录在 `docs/FUTURE_IMPROVEMENTS.md` 的 `FI-12`。
+
+一期收尾时不强行构建自然语言 query-level benchmark。Amazon Reviews 2023 当前数据没有真实导购 query 或 query-product 人工相关性标注，因此自然语言 query 链路只作为 demo、延迟诊断和人工审查场景；query-level 标注评估集建设已作为 `FI-13` 记录到 `docs/FUTURE_IMPROVEMENTS.md`。
 
 最近验证状态：
 
@@ -87,6 +89,69 @@ Streamlit UI 入口：
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run cartwise/ui/app.py
 ```
+
+## 可复现 Demo 流程
+
+以下命令从仓库根目录运行。Python 命令统一使用虚拟环境中的 `.\.venv\Scripts\python.exe`。下载依赖、模型或数据时，如需代理，优先使用 `http://127.0.0.1:9508`；访问 `127.0.0.1` 和 `localhost` 时应绕过代理。
+
+准备数据和样本：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_dev_sample
+```
+
+训练和评估推荐模型：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.evaluate_popularity --scope full
+.\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
+```
+
+构建商品和评论索引：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_evidence_index --scope full
+```
+
+启动后端和前端：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn cartwise.api.main:app --reload
+.\.venv\Scripts\python.exe -m streamlit run cartwise/ui/app.py
+```
+
+API 示例请求：
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/v1/recommend `
+  -ContentType "application/json" `
+  -Body '{"query":"推荐适合家庭录音的便携麦克风支架","top_k":3}'
+```
+
+演示验收重点：
+
+- `/health/ready` 返回 ready 后再发起推荐。
+- Streamlit 输入自然语言需求后返回 Top K 商品卡片。
+- 推荐结果包含召回来源、推荐理由、潜在缺点和评论证据。
+- 评论引用只来自对应商品的检索证据。
+- LLM 不可用、输出非法或引用非法时触发模板回退。
+
+## 一期评估边界
+
+一期可以严谨记录基于历史交互划分的推荐指标，例如 Popularity 和 LightGCN 的 `Recall@10`、`NDCG@10` 和 `HitRate@10`。自然语言 query 到最终推荐结果的严格离线评估暂不纳入一期，因为当前数据没有 query-level 标注集。
+
+自然语言导购链路的一期验收重点是：
+
+- API 和 Streamlit 可以端到端跑通。
+- 结构化硬过滤不会返回明显违反约束的商品。
+- Evidence RAG 只在最终候选商品范围内检索评论。
+- 中文解释和潜在缺点有对应评论证据或模板回退。
+- 延迟瓶颈通过 `cartwise_timing` 日志可定位。
 
 ## 测试命令
 

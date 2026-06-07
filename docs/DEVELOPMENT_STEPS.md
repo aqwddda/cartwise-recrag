@@ -14,7 +14,7 @@
 - 使用 LLM 解析意图，并使用 LangChain 基于已验证事实生成中文解释。
 - 使用 FastAPI 提供接口，使用 Streamlit 提供演示页面。
 
-一期暂时不实现 CrossEncoder、Redis、复杂 Agent、商品共购图扩展、持久化会话、长期记忆、复杂用户画像更新或多智能体编排。当前下一步先实现单轮 FastAPI 推荐接口，再实现 Streamlit HTTP 客户端和页面。
+一期暂时不实现 CrossEncoder、Redis、复杂 Agent、商品共购图扩展、持久化会话、长期记忆、复杂用户画像更新或多智能体编排。当前 FastAPI 与 Streamlit 单轮 MVP 已完成，后续新增能力统一进入未来改进项或二期范围。
 
 ## 当前目录结构
 
@@ -138,12 +138,12 @@ requirements.txt
 # 2 passed, 3 warnings
 ```
 
-下一步开发顺序：
+当前收尾顺序：
 
-1. 阶段 9：先完成 FastAPI schema、依赖注入和接口测试，再接真实 Application Service。
-2. 阶段 10：实现 Streamlit HTTP 客户端和页面。Streamlit 只能通过 HTTP 调用 FastAPI。
-3. 阶段 11：端到端联调、正式评估、延迟记录和 README 精简。
-4. MVP 后：统一迁移旧 wrapper 调用方，删除兼容 wrapper，考虑将 `core/config.py` 迁移到顶层。
+1. 阶段 9 FastAPI 已完成并通过测试。
+2. 阶段 10 Streamlit 已完成并通过测试。
+3. 阶段 11 作为一期收尾，更新 README、CURRENT_STAGE 和后续改进项，不强行构建 query-level benchmark。
+4. MVP 后：统一迁移旧 wrapper 调用方，删除或降级兼容 wrapper，考虑将 `core/config.py` 迁移到顶层。
 
 ## 阶段 1：最小 API
 
@@ -382,8 +382,7 @@ tests/test_lightgcn.py
 
 开发样本用于验证训练、保存、加载、推理和评估链路，不用于证明最终模型增益。
 阶段 5 即使用与本机显卡匹配的官方 CUDA 版 PyTorch 完成实现和开发样本训练，
-避免阶段 11 正式训练前再修改设备选择、模型保存加载或批量评估代码。全量数据训练和
-正式指标对比仍留到阶段 11。
+避免后续正式评估或复现实验前再修改设备选择、模型保存加载或批量评估代码。
 
 训练脚本必须显式支持 `device` 配置，并在请求使用 CUDA 但 CUDA 不可用时立即报错，
 不要静默回退到 CPU。模型保存加载、Top K 推理和批量评估必须使用同一套设备选择逻辑。
@@ -944,49 +943,35 @@ git add .
 git commit -m "feat: add streamlit demo"
 ```
 
-## 阶段 11：正式评估和收尾
+## 阶段 11：一期收尾
 
-### 正式实验
+阶段 11 不再强行构建自然语言 query-level 正式 benchmark。Amazon Reviews 2023
+`Musical_Instruments` 数据没有真实导购 query、搜索日志或 query-product 人工相关性标注，
+临时人工 query 只能用于 demo、延迟诊断、解释质量检查和人工抽样审查，不能伪装成严格
+离线评估集。Query-level 推荐评估集建设放入 `docs/FUTURE_IMPROVEMENTS.md`。
 
-在完整数据上运行：
+### 一期收尾范围
 
-- Popularity。
-- LightGCN。
-- LightGCN + Dense/BM25 + 硬过滤。
+- 确认 FastAPI + Streamlit 单轮 MVP 已跑通。
+- README 补齐环境、数据、训练、索引、API、Streamlit、示例请求、已知限制和 demo 流程。
+- CURRENT_STAGE 记录一期完成状态、验证结果、评估边界和后续任务。
+- FUTURE_IMPROVEMENTS 记录 query-level 评估集建设和端到端 5 秒内延迟优化。
+- 不修改召回算法、Fusion 公式、过滤规则、Qdrant collection、模型参数或阶段 0 fixture。
 
-### 记录指标
+### 可保留的正式指标
 
-- `Recall@10`
-- `NDCG@10`
-- `HitRate@10`
-- 本地链路 P50 和 P95 延迟。
-- 包含 LLM 的端到端 P50 和 P95 延迟。
-- 50 个推荐结果的评论引用准确性人工抽检。
+一期仍可严谨记录基于历史交互划分的离线推荐指标：
 
-### 补充文档
+- Popularity 的 `Recall@10`、`NDCG@10` 和 `HitRate@10`。
+- LightGCN 的 `Recall@10`、`NDCG@10` 和 `HitRate@10`。
+- 现有 API/UI 自动化测试和端到端 demo 结果。
+- 已有 `cartwise_timing` 日志中的本机推荐链路与包含 LLM 的端到端延迟。
 
-完善 `README.md`：
-
-- 项目介绍。
-- 环境安装步骤。
-- 数据准备步骤。
-- 训练命令。
-- 索引构建命令。
-- 后端和前端启动命令。
-- 示例请求。
-- 已知限制。
-- 演示流程。
-
-MVP 跑通 API 与 UI 之后，再规划 wrapper 清理：
-
-- 迁移旧测试和 legacy harness 中的 `cartwise.core.llm`、`cartwise.core.evidence_rag` 调用。
-- 删除或降级兼容 wrapper。
-- 评估是否将 `cartwise/core/config.py` 迁移为 `cartwise/config.py`。
-- 精简 README 和历史开发说明。
+自然语言 query 到最终推荐结果的严格离线指标留到后续 query-level 标注集完成后再报告。
 
 ### 最终走查
 
-使用小样本从零执行：
+使用可用样本或完整数据执行：
 
 ```text
 安装依赖
@@ -995,14 +980,17 @@ MVP 跑通 API 与 UI 之后，再规划 wrapper 清理：
 -> 构建索引
 -> 启动 API
 -> 启动 Streamlit
--> 请求 Top 5
+-> 请求 Top K
 -> 检查评论证据引用
 -> 检查中文解释和模板回退
 ```
+
+如果本轮只是文档收尾，不启动 Web 服务、不重建索引、不重训模型；通过全量测试确认代码
+状态未被破坏。
 
 ### 提交
 
 ```powershell
 git add .
-git commit -m "docs: complete reproducible demo guide"
+git commit -m "docs: finalize phase 1 scope"
 ```
