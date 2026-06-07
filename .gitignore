@@ -19,6 +19,10 @@ artifacts/reports/manual_testing/*
 !artifacts/reports/manual_testing/retrieval_audit_queries.json
 reports/**/*.part
 qdrant_storage/
+docs/CURRENT_STAGE.md
+docs/DECISIONS.md
+docs/PROJECT_CONTEXT.md
+docs/FUTURE_IMPROVEMENTS.md
 storage/qdrant/
 *.log
 *.tmp

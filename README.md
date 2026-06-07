@@ -1,185 +1,281 @@
-# CartWise
+# CartWise - 可解释电商导购推荐系统
 
-CartWise 是一个基于 RAG 的可解释个性化电商导购系统。项目使用 Amazon Reviews 2023 `Musical_Instruments` 数据，将用户历史偏好、当前自然语言需求、结构化硬约束和真实评论证据结合起来，返回可追溯的商品推荐解释。
+CartWise 是一个基于 FastAPI + Streamlit 的乐器电商自然语言推荐 MVP。
 
-## 当前状态
+用户输入购物需求后，系统会进行意图解析、混合召回、融合排序、结构化过滤，并从商品评论中检索证据，生成带评论依据的中文推荐理由和潜在缺点。
 
-当前源码已经完成一期功能闭环：推荐链路结构重构、服务层提取、FastAPI 接入、Streamlit 单轮演示页面、阶段级延迟诊断和第一轮低风险延迟优化。Streamlit 只通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence、Qdrant、模型对象或 LLM client。
+---
 
-阶段 10 已完成第一轮延迟可观测性和小范围优化：后端记录阶段级 `cartwise_timing` 日志，Evidence review query 向量支持进程内缓存，Streamlit 默认 `top_k=3` 并通过 `st.session_state` 避免页面 rerun 重复请求。进一步将端到端推荐压到 5 秒内的优化计划已记录在 `docs/FUTURE_IMPROVEMENTS.md` 的 `FI-12`。
+## 项目截图
 
-一期收尾时不强行构建自然语言 query-level benchmark。Amazon Reviews 2023 当前数据没有真实导购 query 或 query-product 人工相关性标注，因此自然语言 query 链路只作为 demo、延迟诊断和人工审查场景；query-level 标注评估集建设已作为 `FI-13` 记录到 `docs/FUTURE_IMPROVEMENTS.md`。
+### Streamlit 推荐界面
 
-最近验证状态：
+<img src="docs/assets/streamlit-query-form.png" alt="Streamlit 推荐界面" width="900">
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-# 154 passed, 3 warnings
+### 推荐结果与评论证据
 
-.\.venv\Scripts\python.exe -m pytest tests/test_api_dependencies.py tests/test_api_lifespan.py tests/test_api.py -q --basetemp="$env:TEMP\cartwise-pytest-api"
-# 21 passed
-```
+<img src="docs/assets/streamlit-recommendation-result.png" alt="推荐结果与评论证据" width="900">
 
-## 核心能力
+---
 
-- Query 翻译与意图解析：中文 query 先转英文，英文 query 直接进入检索；意图解析只抽取显式约束。
-- 商品召回：BM25、Dense、Popularity、LightGCN。
-- 过滤与融合：代码层硬过滤和 weighted RRF Fusion。
-- 评论证据 RAG：只在最终候选商品范围内检索评论证据。
-- 结构化解释：LLM 输出经引用校验，不合法时模板回退。
-- 行为回归：阶段 0 legacy regression fixture 固定旧链路关键结构行为。
-
-## 当前架构分层
+## 架构
 
 ```text
-cartwise/
-  application/      # RecommendationApplicationService 和 API composition root
-  api/              # FastAPI 推荐接口、schema、lifespan 和 readiness
-  catalog/          # 商品文档构造共享逻辑
-  core/             # config.py 仍有效；llm.py/evidence_rag.py 是兼容 wrapper
-  evidence/         # Evidence RAG、EvidenceService 和证据类型
-  query/            # Query LLM adapter 和 FilterConstraints 等 query 类型
-  recommendation/   # RecommendationService 和推荐服务类型
-  retrieval/        # Dense、BM25、Popularity、LightGCN、filters、fusion
-  ui/               # Streamlit HTTP client 和单轮演示页面
-scripts/
-  tools/
-    audit_retrieval.py
-    run_stage8_smoke.py
-    stage8_smoke_adapter.py
+用户需求
+  -> LLM 查询翻译 / 意图解析
+  -> BM25 + Dense + LightGCN + Popularity 召回
+  -> 硬过滤
+  -> Weighted RRF 融合排序
+  -> 最终推荐商品
+  -> Review Evidence RAG
+  -> 推荐理由 / 潜在缺点
+  -> FastAPI
+  -> Streamlit
 ```
 
-正式业务入口是 `cartwise.application.RecommendationApplicationService`。FastAPI 路由调用该服务，而不是在路由里重新拼装 Dense、BM25、Popularity、LightGCN、Fusion、Qdrant 或 LLM。
+---
 
-## 主要模块
+## 功能
 
-- `cartwise.recommendation.service.RecommendationService`：正式推荐链路编排，负责意图解析、过滤约束、Dense、BM25、Popularity、LightGCN 和 Fusion。
-- `cartwise.evidence.service.EvidenceService`：基于最终候选商品批量检索评论证据并生成解释。
-- `cartwise.application.service.RecommendationApplicationService`：串联 RecommendationService 和 EvidenceService，输出应用层结构化结果。
-- `scripts.tools.stage8_smoke_adapter.Stage8SmokeAdapter`：只服务历史 Stage 8 smoke 工具，不属于正式业务服务，FastAPI 不得调用。
+- 中文自然语言购物需求输入
+- LLM 查询翻译与意图解析
+- BM25 关键词召回
+- Dense 向量召回
+- LightGCN 个性化召回
+- Popularity 冷启动召回
+- Weighted RRF 多路召回融合
+- 价格、品牌、颜色、材质等硬过滤
+- 基于商品评论的 Evidence RAG
+- 推荐理由和潜在缺点生成
+- FastAPI 后端接口
+- Streamlit 前端页面
 
-## 运行入口
+---
 
-常用脚本入口：
+## 技术栈
+
+- Frontend: Streamlit
+- Backend: FastAPI, Uvicorn
+- LLM: OpenAI
+- Vector DB: Qdrant
+- Retrieval: BM25, Dense Retrieval
+- Recommendation: LightGCN, Popularity
+- RAG: LangChain
+- Data: Amazon Reviews 2023 `Musical_Instruments`
+- ML: PyTorch, PyTorch Geometric
+- Test: pytest
+
+---
+
+## Quick Start
+
+如果只是查看代码结构或运行不依赖真实数据的测试，可以先完成 Python 环境安装。
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.tools.audit_retrieval --scope full --channels fusion --query "guitar tuner for beginners" --top-k 5
-
-.\.venv\Scripts\python.exe -m scripts.tools.run_stage8_smoke --scope full --query "guitar tuner for beginners" --top-k 5 --dense-k 10 --bm25-k 10 --device cuda
+git clone https://github.com/aqwddda/cartwise-recrag.git
+cd CartWise
 ```
 
-FastAPI 入口：
+设置虚拟环境：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+```
+
+安装依赖:
+
+```powershell
+python.exe -m pip install -r requirements.txt
+```
+
+运行测试：
+
+```powershell
+python.exe -m pytest -q
+```
+
+注意：这一步不能直接跑完整推荐系统。完整链路还需要本地数据、Qdrant 向量 collection、BM25 索引、LightGCN checkpoint 和 LLM API Key。
+
+---
+
+## Full Local Setup
+
+本仓库不提交原始数据、向量索引、模型权重、Qdrant storage 或 API Key。完整运行推荐链路前，需要先准备以下本地产物：
+
+- Amazon Reviews 2023 `Musical_Instruments` 原始数据
+- 预处理后的商品、评论和交互数据
+- BM25 商品索引
+- Qdrant 商品向量 collection
+- Qdrant 评论证据 collection
+- LightGCN checkpoint
+- OpenAI-compatible LLM API Key
+
+### 1. 启动 Qdrant
+
+可以使用 Docker 启动本地 Qdrant：
+
+```powershell
+docker run -p 6333:6333 qdrant/qdrant
+```
+
+如果你使用本地持久化 storage，请确认该目录不要提交到 Git。
+
+### 2. 配置环境变量
+
+本项目当前使用 [DeepSeek API](https://api-docs.deepseek.com/) 作为 OpenAI-compatible LLM 服务。在项目根目录创建 `.env` 文件：
 
 ```text
-GET  /health/live
-GET  /health/ready
-POST /api/v1/recommend
+QDRANT_URL=http://127.0.0.1:6333
+DEEPSEEK_API_KEY=your_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
 ```
 
-启动后端：
+也可以使用通用 OpenAI-compatible 配置：
 
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn cartwise.api.main:app --reload
+```text
+OPENAI_COMPATIBLE_API_KEY=your_key_here
+OPENAI_COMPATIBLE_BASE_URL=https://your-provider.example.com
+OPENAI_COMPATIBLE_MODEL=your-model-name
 ```
 
-默认 app 会在启动期构造真实 `RecommendationApplicationService`。如果本机 Qdrant、collection、数据文件、BM25、LightGCN 模型或 LLM Key 缺失，`/health/ready` 会返回 not ready 和初始化错误。
+不要提交 `.env`、API Key、数据文件、模型权重或 Qdrant 存储目录。
 
-Streamlit UI 入口：
+### 3. 准备数据
 
-```powershell
-.\.venv\Scripts\python.exe -m streamlit run cartwise/ui/app.py
-```
-
-## 可复现 Demo 流程
-
-以下命令从仓库根目录运行。Python 命令统一使用虚拟环境中的 `.\.venv\Scripts\python.exe`。下载依赖、模型或数据时，如需代理，优先使用 `http://127.0.0.1:9508`；访问 `127.0.0.1` 和 `localhost` 时应绕过代理。
-
-准备数据和样本：
+将 Amazon Reviews 2023 `Musical_Instruments` 数据放到本地数据目录后，运行预处理脚本：
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.pipeline.preprocess_amazon_reviews
 .\.venv\Scripts\python.exe -m scripts.pipeline.build_dev_sample
 ```
 
-训练和评估推荐模型：
+### 4. 构建商品索引
+
+构建 BM25 商品索引：
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.pipeline.evaluate_popularity --scope full
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
+```
+
+构建 Dense 商品向量 collection：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full --models e5 --recreate
+```
+
+默认商品 Dense collection 名称形如：
+
+```text
+cartwise_products_full_e5_small_v2
+```
+
+### 5. 构建评论证据索引
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.pipeline.build_evidence_index --scope full --recreate
+```
+
+默认评论 Evidence collection 名称形如：
+
+```text
+cartwise_review_evidence_full_intfloat_e5_small_v2
+```
+
+### 6. 训练 LightGCN
+
+```powershell
 .\.venv\Scripts\python.exe -m scripts.pipeline.train_lightgcn --scope full
 ```
 
-构建商品和评论索引：
+如果你已经有 checkpoint，也可以放到项目期望的本地模型路径中，再启动后端。
 
-```powershell
-.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_dense_index --scope full
-.\.venv\Scripts\python.exe -m scripts.pipeline.build_product_bm25_index --scope full
-.\.venv\Scripts\python.exe -m scripts.pipeline.build_evidence_index --scope full
-```
-
-启动后端和前端：
+### 7. 启动 FastAPI
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn cartwise.api.main:app --reload
+```
+
+检查 readiness：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+```
+
+如果本地数据、BM25 索引、Qdrant collections、LightGCN checkpoint 或 LLM 配置缺失，`/health/ready` 会返回不可用状态。
+
+### 8. 启动 Streamlit
+
+```powershell
 .\.venv\Scripts\python.exe -m streamlit run cartwise/ui/app.py
 ```
 
-API 示例请求：
+Streamlit 只通过 HTTP 调用 FastAPI，不直接导入推荐、召回、Evidence RAG、Qdrant 或 LLM 内部模块。
+
+---
+
+## API
+
+健康检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
+```
+
+推荐请求：
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
   -Uri http://127.0.0.1:8000/api/v1/recommend `
   -ContentType "application/json" `
-  -Body '{"query":"推荐适合家庭录音的便携麦克风支架","top_k":3}'
+  -Body '{"query":"推荐适合新手的电吉他","top_k":3}'
 ```
 
-演示验收重点：
+---
 
-- `/health/ready` 返回 ready 后再发起推荐。
-- Streamlit 输入自然语言需求后返回 Top K 商品卡片。
-- 推荐结果包含召回来源、推荐理由、潜在缺点和评论证据。
-- 评论引用只来自对应商品的检索证据。
-- LLM 不可用、输出非法或引用非法时触发模板回退。
+## 项目结构
 
-## 一期评估边界
+```text
+cartwise/
+  api/              FastAPI 路由和 schema
+  application/      应用服务入口
+  catalog/          商品文档构建
+  core/             配置模块
+  evidence/         评论 Evidence RAG
+  query/            查询翻译和意图解析
+  recommendation/   推荐服务编排
+  retrieval/        BM25、Dense、LightGCN、Popularity、过滤和融合
+  ui/               Streamlit 页面和 HTTP client
 
-一期可以严谨记录基于历史交互划分的推荐指标，例如 Popularity 和 LightGCN 的 `Recall@10`、`NDCG@10` 和 `HitRate@10`。自然语言 query 到最终推荐结果的严格离线评估暂不纳入一期，因为当前数据没有 query-level 标注集。
+scripts/
+  pipeline/         数据处理、模型训练、索引构建
+  tools/            smoke、审核和检查工具
+  experiments/      实验脚本
 
-自然语言导购链路的一期验收重点是：
-
-- API 和 Streamlit 可以端到端跑通。
-- 结构化硬过滤不会返回明显违反约束的商品。
-- Evidence RAG 只在最终候选商品范围内检索评论。
-- 中文解释和潜在缺点有对应评论证据或模板回退。
-- 延迟瓶颈通过 `cartwise_timing` 日志可定位。
-
-## 测试命令
-
-完整测试：
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+tests/              API、UI、service、retrieval 和 regression 测试
+docs/               阶段记录、架构决策和后续计划
 ```
 
-服务层和回归测试：
+---
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_application_service.py tests/test_recommendation_service.py tests/test_evidence_service.py tests/regression/test_legacy_regression.py
-```
+## 当前限制
 
-API 测试：
+- 当前是本地 MVP，不是生产级电商系统
+- 不随仓库提供原始数据、索引、模型 checkpoint、Qdrant storage 或 API Key
+- 端到端延迟主要受 Evidence 检索和 LLM 解释影响
+- 暂未接入真实商品图片
+- 暂不支持多轮对话和单商品追问
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_api.py tests/test_api_dependencies.py tests/test_api_lifespan.py
-```
+---
 
-## 开发规则摘要
+## 致谢
 
-- 开发前先读 `docs/CURRENT_STAGE.md`、`docs/DECISIONS.md`、`docs/DEVELOPMENT_STEPS.md` 和 `docs/PROJECT_PLAN.md`。
-- 新业务代码使用 `cartwise.query.llm`、`cartwise.evidence.rag`、`cartwise.recommendation` 和 `cartwise.application`。
-- 不要从 `cartwise.core.llm` 或 `cartwise.core.evidence_rag` 写新调用；它们当前只是兼容 wrapper。
-- 不要把 `smoke_search_only`、`mode` 或其他历史 smoke 分支重新引入正式服务契约。
-- 不要修改阶段 0 fixture 来掩盖行为变化。
-- Streamlit 只能通过 HTTP 调用 FastAPI，不直接导入 retrieval、recommendation、evidence 或模型对象。
-
-更多当前阶段要求见 `docs/CURRENT_STAGE.md`。
+- [FastAPI](https://fastapi.tiangolo.com/)
+- [Streamlit](https://streamlit.io/)
+- [Qdrant](https://qdrant.tech/)
+- [LangChain](https://www.langchain.com/)
+- [PyTorch](https://pytorch.org/) / [PyTorch Geometric](https://pyg.org/)
+- [DeepSeek API](https://api-docs.deepseek.com/)
+- [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/)
