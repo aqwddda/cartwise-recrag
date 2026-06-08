@@ -16,6 +16,8 @@ CartWise 是一个基于 FastAPI + Streamlit 的乐器电商自然语言推荐 M
 
 <img src="docs/assets/streamlit-recommendation-result.png" alt="推荐结果与评论证据" width="900">
 
+<img src="docs/assets/streamlit-recommendation-result2.png" alt="推荐结果与评论证据" width="900">
+
 ---
 
 ## 架构
